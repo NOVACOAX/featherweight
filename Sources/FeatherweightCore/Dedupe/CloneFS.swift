@@ -21,8 +21,17 @@ public enum CloneError: Error {
     case notRegularFile
     case differentVolume
     case changedDuringReplace
+    /// The duplicate has other hard links, so replacing it would free nothing.
+    case hardlinked
+    /// Keeper and duplicate are already the same inode.
+    case sameFile
+    /// Keeper or duplicate is decmpfs-compressed (`UF_COMPRESSED`).
+    case compressed
     /// A failed system call: its name and `errno`.
     case system(String, Int32)
+    /// The replace failed with `underlying`, and the temporary clone at `path` could not be
+    /// removed (`errno` from `unlink`).
+    case cleanupFailed(path: String, errno: Int32, underlying: any Error)
 }
 
 public enum CloneFS {
@@ -81,7 +90,9 @@ public enum CloneFS {
 
     /// Atomically replaces `duplicate` with an APFS clone of `keeper`, keeping the duplicate's
     /// mode, owner, times, xattrs and ACL. On any failure the duplicate is left untouched and
-    /// the temporary clone is removed. `beforeRename` runs last, just before the duplicate is
+    /// the temporary clone is removed. Refuses symlinks and other non-regular files, a duplicate
+    /// with other hard links, two paths to one inode, compressed files and cross-volume pairs.
+    /// `beforeRename` runs last, just before the duplicate is
     /// re-checked and replaced; a throw from it aborts the replace.
     public static func replaceWithClone(
         of keeper: URL, replacing duplicate: URL, beforeRename: (() throws -> Void)? = nil
@@ -90,10 +101,7 @@ public enum CloneFS {
         let dupPath = duplicate.path
         let keeperStat = try lstatOrThrow(keeperPath)
         let dupStat = try lstatOrThrow(dupPath)
-        guard keeperStat.st_mode & S_IFMT == S_IFREG, dupStat.st_mode & S_IFMT == S_IFREG else {
-            throw CloneError.notRegularFile
-        }
-        guard keeperStat.st_dev == dupStat.st_dev else { throw CloneError.differentVolume }
+        if let refused = refusal(keeper: keeperStat, duplicate: dupStat) { throw refused }
 
         let dir = (dupPath as NSString).deletingLastPathComponent
         let name = (dupPath as NSString).lastPathComponent
@@ -104,6 +112,11 @@ public enum CloneFS {
             throw err == EXDEV ? CloneError.differentVolume : CloneError.system("clonefile", err)
         }
         do {
+            // The clone inherits the keeper's BSD flags; uchg/uappnd would block the steps below
+            // and the cleanup. Flags are not carried over from either file.
+            if try lstatOrThrow(tmp).st_flags != 0, lchflags(tmp, 0) != 0 {
+                throw CloneError.system("lchflags", errno)
+            }
             // Replaces the clone's xattrs (inherited from the keeper) and ACL with the duplicate's.
             if copyfile(dupPath, tmp, nil, copyfile_flags_t(COPYFILE_XATTR | COPYFILE_ACL)) != 0 {
                 throw CloneError.system("copyfile", errno)
@@ -130,7 +143,10 @@ public enum CloneFS {
             }
             if rename(tmp, dupPath) != 0 { throw CloneError.system("rename", errno) }
         } catch {
-            unlink(tmp)
+            _ = lchflags(tmp, 0)
+            if unlink(tmp) != 0, errno != ENOENT {
+                throw CloneError.cleanupFailed(path: tmp, errno: errno, underlying: error)
+            }
             throw error
         }
     }
@@ -149,6 +165,20 @@ public enum CloneFS {
             }
         }
         return total
+    }
+
+    /// Why `duplicate` must not be replaced by a clone of `keeper`, or nil if it may be.
+    static func refusal(keeper: stat, duplicate: stat) -> CloneError? {
+        guard keeper.st_mode & S_IFMT == S_IFREG, duplicate.st_mode & S_IFMT == S_IFREG else {
+            return .notRegularFile
+        }
+        if keeper.st_dev == duplicate.st_dev, keeper.st_ino == duplicate.st_ino { return .sameFile }
+        if duplicate.st_nlink > 1 { return .hardlinked }
+        // copyfile's xattr replacement could strip com.apple.decmpfs from a compressed clone.
+        let compressed = UInt32(UF_COMPRESSED)
+        if keeper.st_flags & compressed != 0 || duplicate.st_flags & compressed != 0 { return .compressed }
+        if keeper.st_dev != duplicate.st_dev { return .differentVolume }
+        return nil
     }
 
     // <sys/attr.h> common extended attributes (requested via `forkattr`).

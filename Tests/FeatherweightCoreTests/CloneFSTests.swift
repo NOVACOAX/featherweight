@@ -48,6 +48,28 @@ import Testing
 
     struct Interrupted: Error {}
 
+    /// The `CloneError` thrown by `body`, or nil if it returned or threw something else.
+    private func cloneError(_ body: () throws -> Void) -> CloneError? {
+        do { try body() } catch let error as CloneError { return error } catch { return nil }
+        return nil
+    }
+
+    private func flags(of url: URL) -> UInt32 {
+        var st = stat()
+        _ = lstat(url.path, &st)
+        return st.st_flags
+    }
+
+    private func regularStat(ino: UInt64, nlink: UInt16 = 1, flags: UInt32 = 0) -> stat {
+        var st = stat()
+        st.st_dev = 1
+        st.st_ino = ino
+        st.st_mode = S_IFREG | 0o644
+        st.st_nlink = nlink
+        st.st_flags = flags
+        return st
+    }
+
     @Test func cloneIsByteIdentical() throws {
         let (tree, keeper, dup) = try makePair(
             keeper: "MAgPIE Studio/keep é.js", duplicate: "Lightroom /dup copy .js")
@@ -184,5 +206,99 @@ import Testing
         #expect(lone.privateSize > 0)
         #expect(try CloneFS.info(at: tree.url("dir/linked.js")).privateSize > 0)
         #expect(CloneFS.privateBytes(under: tree.url("dir")) == lone.privateSize)
+    }
+
+    @Test(arguments: [UInt32(UF_IMMUTABLE), UInt32(UF_APPEND)])
+    func lockedKeeperLeavesNoTemp(flag: UInt32) throws {
+        let (tree, keeper, dup) = try makePair()
+        defer { tree.remove() }
+        #expect(chflags(keeper.path, flag) == 0)
+        defer {
+            _ = chflags(keeper.path, 0)
+            _ = chflags(dup.path, 0)
+        }
+        let before = try CloneFS.info(at: dup)
+        do {
+            try CloneFS.replaceWithClone(of: keeper, replacing: dup)
+            #expect(flags(of: dup) & (UInt32(UF_IMMUTABLE) | UInt32(UF_APPEND)) == 0)
+            #expect(try CloneFS.info(at: dup).sharesAllBlocks)
+        } catch {
+            #expect(try CloneFS.info(at: dup).inode == before.inode)
+        }
+        #expect(try tempFiles(in: dup.deletingLastPathComponent()).isEmpty)
+        #expect(try Data(contentsOf: dup) == Data(Self.payload.utf8))
+        #expect(flags(of: keeper) == flag)
+    }
+
+    @Test func refusesHardlinkedDuplicate() throws {
+        let (tree, keeper, dup) = try makePair()
+        defer { tree.remove() }
+        #expect(link(dup.path, tree.url("dup/other-link.js").path) == 0)
+        let before = try CloneFS.info(at: dup)
+        let error = cloneError { try CloneFS.replaceWithClone(of: keeper, replacing: dup) }
+        guard case .hardlinked? = error else {
+            Issue.record("expected hardlinked, got \(String(describing: error))")
+            return
+        }
+        #expect(try CloneFS.info(at: dup).inode == before.inode)
+        #expect(try tempFiles(in: dup.deletingLastPathComponent()).isEmpty)
+    }
+
+    @Test func refusesSameFile() throws {
+        let (tree, keeper, _) = try makePair()
+        defer { tree.remove() }
+        let samePath = cloneError { try CloneFS.replaceWithClone(of: keeper, replacing: keeper) }
+        guard case .sameFile? = samePath else {
+            Issue.record("expected sameFile for one path, got \(String(describing: samePath))")
+            return
+        }
+        let alias = tree.url("keep/alias.js")
+        #expect(link(keeper.path, alias.path) == 0)
+        let hardlink = cloneError { try CloneFS.replaceWithClone(of: keeper, replacing: alias) }
+        guard case .sameFile? = hardlink else {
+            Issue.record("expected sameFile for a hardlink, got \(String(describing: hardlink))")
+            return
+        }
+        #expect(try tempFiles(in: keeper.deletingLastPathComponent()).isEmpty)
+    }
+
+    @Test func refusesCompressedKeeper() throws {
+        // `ditto --hfsCompression` does not compress on this machine, so use a decmpfs-compressed
+        // file from the read-only system volume as the keeper. Nothing is written to it.
+        let bin = URL(fileURLWithPath: "/usr/bin")
+        let compressed = try FileManager.default.contentsOfDirectory(atPath: bin.path)
+            .map { bin.appendingPathComponent($0) }
+            .first { var st = stat(); return lstat($0.path, &st) == 0
+                && st.st_mode & S_IFMT == S_IFREG && st.st_flags & UInt32(UF_COMPRESSED) != 0 }
+        let keeper = try #require(compressed)
+        let tree = try TempTree(["dup/a": Self.payload])
+        defer { tree.remove() }
+        let error = cloneError { try CloneFS.replaceWithClone(of: keeper, replacing: tree.url("dup/a")) }
+        guard case .compressed? = error else {
+            Issue.record("expected compressed, got \(String(describing: error))")
+            return
+        }
+        #expect(try Data(contentsOf: tree.url("dup/a")) == Data(Self.payload.utf8))
+    }
+
+    @Test func refusalChecksFlagsAndLinks() {
+        let keeper = regularStat(ino: 1)
+        let compressedFlag = UInt32(UF_COMPRESSED)
+        #expect(CloneFS.refusal(keeper: keeper, duplicate: regularStat(ino: 2)) == nil)
+        if case .compressed? = CloneFS.refusal(
+            keeper: keeper, duplicate: regularStat(ino: 2, flags: compressedFlag)) {} else {
+            Issue.record("compressed duplicate not refused")
+        }
+        if case .compressed? = CloneFS.refusal(
+            keeper: regularStat(ino: 1, flags: compressedFlag), duplicate: regularStat(ino: 2)) {} else {
+            Issue.record("compressed keeper not refused")
+        }
+        if case .hardlinked? = CloneFS.refusal(keeper: keeper, duplicate: regularStat(ino: 2, nlink: 2)) {} else {
+            Issue.record("hardlinked duplicate not refused")
+        }
+        #expect(CloneFS.refusal(keeper: regularStat(ino: 1, nlink: 3), duplicate: regularStat(ino: 2)) == nil)
+        if case .sameFile? = CloneFS.refusal(keeper: keeper, duplicate: regularStat(ino: 1)) {} else {
+            Issue.record("same inode not refused")
+        }
     }
 }
