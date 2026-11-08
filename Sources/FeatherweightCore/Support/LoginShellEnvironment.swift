@@ -27,12 +27,13 @@ public enum LoginShellEnvironment {
         do { try process.run() } catch { return fallback }
         let reader = PipeReader(outPipe.fileHandleForReading)
 
-        guard let data = reader.data(timeout: timeout) else {
+        let output = reader.read(timeout: timeout)
+        guard output.complete else {
             process.terminate()
             return fallback
         }
         process.waitUntilExit()
-        guard process.terminationStatus == 0, let parsed = parse(data), parsed["PATH"] != nil else {
+        guard process.terminationStatus == 0, let parsed = parse(output.data), parsed["PATH"] != nil else {
             return fallback
         }
         return parsed

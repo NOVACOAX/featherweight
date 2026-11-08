@@ -58,4 +58,54 @@ struct CommandRunnerTests {
         let environment = LoginShellEnvironment.resolve(shell: "/bin/zsh", timeout: 10)
         #expect(!(environment["PATH"] ?? "").isEmpty)
     }
+
+    @Test func runnerReturnsWhenBackgroundProcessHoldsThePipes() throws {
+        let runner = ProcessCommandRunner(environment: ["PATH": "/usr/bin:/bin"])
+        let started = Date()
+        let result = try runner.run("sh", ["-c", "sleep 10 & echo done"], in: nil)
+        #expect(result.stdout == "done\n")
+        #expect(result.succeeded)
+        #expect(Date().timeIntervalSince(started) < 8)
+    }
+
+    /// Writes an executable script to stand in for the login shell. It ignores the `-ilc` arguments.
+    private func makeFakeShell(_ body: String) throws -> String {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("featherweight-shell-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let script = directory.appendingPathComponent("fake-shell")
+        try Data("#!/bin/sh\n\(body)\n".utf8).write(to: script)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
+        return script.path
+    }
+
+    @Test func loginShellEnvironmentParsesMarkerAndNulSeparatedEntries() throws {
+        let shell = try makeFakeShell(
+            #"printf 'rc noise\nmore noise\n__FW__PATH=/custom\0EMPTY=\0WITH_EQUALS=a=b\0HOME=/home/x\0'"#
+        )
+        let environment = LoginShellEnvironment.resolve(shell: shell, timeout: 10)
+        #expect(environment == [
+            "PATH": "/custom", "EMPTY": "", "WITH_EQUALS": "a=b", "HOME": "/home/x",
+        ])
+    }
+
+    @Test func loginShellEnvironmentFallsBackWhenOutputHasNoPath() throws {
+        let shell = try makeFakeShell(#"printf '__FW__HOME=/home/x\0'"#)
+        let environment = LoginShellEnvironment.resolve(shell: shell, timeout: 10)
+        #expect(environment == ProcessInfo.processInfo.environment)
+    }
+
+    @Test func loginShellEnvironmentFallsBackWhenShellFails() throws {
+        let shell = try makeFakeShell(#"printf '__FW__PATH=/custom\0'; exit 1"#)
+        let environment = LoginShellEnvironment.resolve(shell: shell, timeout: 10)
+        #expect(environment == ProcessInfo.processInfo.environment)
+    }
+
+    @Test func loginShellEnvironmentFallsBackPromptlyOnTimeout() throws {
+        let shell = try makeFakeShell("exec sleep 30")
+        let started = Date()
+        let environment = LoginShellEnvironment.resolve(shell: shell, timeout: 1)
+        #expect(environment == ProcessInfo.processInfo.environment)
+        #expect(Date().timeIntervalSince(started) < 5)
+    }
 }

@@ -24,6 +24,8 @@ public protocol CommandRunner: Sendable {
 }
 
 public struct ProcessCommandRunner: CommandRunner {
+    private static let outputGrace: TimeInterval = 2
+
     private let environment: [String: String]
 
     public init(environment: [String: String] = LoginShellEnvironment.shared) {
@@ -50,10 +52,15 @@ public struct ProcessCommandRunner: CommandRunner {
         let err = PipeReader(errPipe.fileHandleForReading)
         process.waitUntilExit()
 
+        // A command can exit while a background process it started (a daemon, say) still holds the
+        // pipes open. Give the readers a short grace period, then return whatever arrived.
+        let deadline = Date().addingTimeInterval(Self.outputGrace)
+        let stdout = out.read(timeout: max(0, deadline.timeIntervalSinceNow)).data
+        let stderr = err.read(timeout: max(0, deadline.timeIntervalSinceNow)).data
         return CommandResult(
             exitCode: process.terminationStatus,
-            stdout: String(decoding: out.data() ?? Data(), as: UTF8.self),
-            stderr: String(decoding: err.data() ?? Data(), as: UTF8.self)
+            stdout: String(decoding: stdout, as: UTF8.self),
+            stderr: String(decoding: stderr, as: UTF8.self)
         )
     }
 
