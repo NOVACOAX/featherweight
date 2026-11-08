@@ -175,4 +175,14 @@ import Testing
         #expect(a.privateSize > 0)
         #expect(CloneFS.privateBytes(under: tree.url("dir")) == a.privateSize)
     }
+
+    @Test func privateBytesSkipsHardlinkedFiles() throws {
+        let tree = try TempTree(["dir/lone.js": Self.payload, "dir/linked.js": Self.payload])
+        defer { tree.remove() }
+        #expect(link(tree.url("dir/linked.js").path, tree.url("dir/linked-2.js").path) == 0)
+        let lone = try CloneFS.info(at: tree.url("dir/lone.js"))
+        #expect(lone.privateSize > 0)
+        #expect(try CloneFS.info(at: tree.url("dir/linked.js")).privateSize > 0)
+        #expect(CloneFS.privateBytes(under: tree.url("dir")) == lone.privateSize)
+    }
 }

@@ -135,14 +135,18 @@ public enum CloneFS {
         }
     }
 
-    /// Sum of `privateSize` over the regular files under `directory`, without following symlinks.
+    /// Sum of `privateSize` over the regular files under `directory` that have a single link,
+    /// without following symlinks. Hardlinked files (such as links into a pnpm store) free
+    /// nothing when deleted, so they contribute 0.
     public static func privateBytes(under directory: URL) -> Int64 {
         guard let walker = FileManager.default.enumerator(
             at: directory, includingPropertiesForKeys: nil, options: [], errorHandler: { _, _ in true })
         else { return 0 }
         var total: Int64 = 0
         for case let url as URL in walker {
-            if let info = try? info(at: url), info.isRegularFile { total += info.privateSize }
+            if let info = try? info(at: url), info.isRegularFile, info.linkCount == 1 {
+                total += info.privateSize
+            }
         }
         return total
     }
