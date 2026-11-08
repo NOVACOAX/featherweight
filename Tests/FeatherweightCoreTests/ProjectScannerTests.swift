@@ -100,4 +100,38 @@ import Testing
         #expect(projects.contains { $0.root.path.hasSuffix("/MAgPIE Studio") })
         #expect(projects.contains { $0.root.path.hasSuffix("/Lightroom ") })
     }
+
+    @Test func scansSymlinkedScanFolder() throws {
+        let tree = try TempTree(["real/proj/package.json": "{}", "links/placeholder": ""])
+        defer { tree.remove() }
+        try FileManager.default.createSymbolicLink(
+            atPath: tree.url("links/dev").path, withDestinationPath: tree.url("real").path)
+        let projects = scanner.scan(folders: [tree.url("links/dev")])
+        #expect(projects.count == 1)
+        #expect(projects.first?.root.path == tree.url("real/proj").path)
+    }
+
+    @Test func rootURLsAreCanonicalAcrossDiscoveryPaths() throws {
+        let tree = try TempTree([
+            "a/package.json": "{}",
+            "a/node_modules/x/index.js": "",
+            "a/functions/package.json": "{}",
+        ])
+        defer { tree.remove() }
+        // Found via enumeration of the parent folder.
+        let viaParent = try #require(scanner.scan(folders: [tree.root]).first { $0.root.lastPathComponent == "a" })
+        // Found as the scanned folder itself (passed without trailing slash and with it).
+        let viaSelf = try #require(scanner.scan(folders: [tree.url("a")]).first { $0.root.lastPathComponent == "a" })
+        let viaSelfSlash = try #require(
+            scanner.scan(folders: [URL(fileURLWithPath: tree.url("a").path + "/", isDirectory: true)])
+                .first { $0.root.lastPathComponent == "a" })
+        #expect(viaParent == viaSelf)
+        #expect(viaParent == viaSelfSlash)
+        #expect(viaParent.root.path == viaSelf.root.path)
+        #expect(viaParent.root.absoluteString == viaSelf.root.absoluteString)
+        #expect(viaParent.nodeModules == viaSelf.nodeModules)
+        // parentRoot of a nested project equals the parent project's root exactly.
+        let nested = try #require(scanner.scan(folders: [tree.root]).first { $0.root.lastPathComponent == "functions" })
+        #expect(nested.parentRoot == viaParent.root)
+    }
 }

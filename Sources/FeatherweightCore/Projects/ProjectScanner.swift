@@ -12,6 +12,12 @@ public struct ProjectScanner: Sendable {
         self.excludedDirectoryNames = excludedDirectoryNames
     }
 
+    /// Canonical form for every URL we hand out: a standardized directory file URL built from
+    /// the plain path, so `Project` values compare equal regardless of discovery path.
+    private static func canonical(_ url: URL) -> URL {
+        URL(fileURLWithPath: url.standardizedFileURL.path, isDirectory: true)
+    }
+
     public func scan(folders: [URL]) -> [Project] {
         var roots = Set<String>()
         var rootURLs: [String: URL] = [:]
@@ -24,7 +30,7 @@ public struct ProjectScanner: Sendable {
         return rootURLs.values
             .sorted { $0.path < $1.path }
             .map { root in
-                let nm = root.appendingPathComponent("node_modules", isDirectory: true)
+                let nm = Self.canonical(root.appendingPathComponent("node_modules", isDirectory: true))
                 var isDir: ObjCBool = false
                 let hasNM = fm.fileExists(atPath: nm.path, isDirectory: &isDir) && isDir.boolValue
                 return Project(
@@ -51,8 +57,11 @@ public struct ProjectScanner: Sendable {
         return FileManager.default.fileExists(atPath: url.appendingPathComponent("pyvenv.cfg").path)
     }
 
-    private func findProjectRoots(in folder: URL) -> [URL] {
+    private func findProjectRoots(in rawFolder: URL) -> [URL] {
         let fm = FileManager.default
+        // Resolve only the top-level folder (a symlinked scan folder would otherwise enumerate
+        // as empty). Nested symlinks are still never followed.
+        let folder = Self.canonical(rawFolder.resolvingSymlinksInPath())
         var found: [URL] = []
         // The folder itself may be a project (it is never yielded by the enumerator).
         if fm.fileExists(atPath: folder.appendingPathComponent("package.json").path),
@@ -71,7 +80,7 @@ public struct ProjectScanner: Sendable {
                     enumerator.skipDescendants()
                 }
             } else if values.isRegularFile == true, url.lastPathComponent == "package.json" {
-                found.append(url.deletingLastPathComponent())
+                found.append(Self.canonical(url.deletingLastPathComponent()))
             }
         }
         return found
