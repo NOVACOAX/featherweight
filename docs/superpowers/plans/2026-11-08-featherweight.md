@@ -716,6 +716,8 @@ naturally covers them. Each has a pinned test in the task named.
     `lastFSEventID` in history (Review Focus 2).
   - **Jobs:** due projects run `dedupe(trigger: .afterInstall, only: roots)`. Scheduled
     jobs use `.scheduled`. All jobs run on a background-QoS queue.
+  - **Notifications:** posted only when `settings.notificationsEnabled` is true. The
+    `NotificationComposer` still flushes, so nothing piles up.
   - **Idle:** no polling. The process sleeps between events.
 
 - [ ] **Step 1: Write failing tests**
@@ -933,8 +935,9 @@ taking screenshots. There are no UI test targets.
      - runs `dedupe` then `clean` with trigger `.firstLaunch`
   4. **Customise settings:** opens Settings before starting.
 - **Update check:** on app launch, if `checkForUpdates` is on and more than 24 hours have
-  passed since `stats.json`'s `lastUpdateCheck` (add that field to `SavingsSnapshot`'s
-  sibling struct `AppState` in `stats.json`). When an update exists, a footer link reads
+  passed since `AppState.lastUpdateCheck`. `AppState` is defined in this task as
+  `public struct AppState: Codable { var lastUpdateCheck: Date? }`, stored at
+  `AppPaths.base/state.json` (add `var appState: URL` to `AppPaths`). When an update exists, a footer link reads
   "Version x.y.z is available" and opens `html_url`.
 
 - [ ] **Step 1: Write failing tests**
@@ -963,7 +966,7 @@ taking screenshots. There are no UI test targets.
 ### Task 13: pnpm conversion engine
 
 **Files:**
-- Create: `Sources/FeatherweightCore/Pnpm/ConversionEligibility.swift`, `PnpmToolchain.swift`, `BuildScriptDetector.swift`, `ConversionBackup.swift`, `PnpmConverter.swift`
+- Create: `Sources/FeatherweightCore/Pnpm/RewriteTypes.swift`, `ConversionEligibility.swift`, `PnpmToolchain.swift`, `BuildScriptDetector.swift`, `ConversionBackup.swift`, `PnpmConverter.swift`
 - Test: `Tests/FeatherweightCoreTests/ConversionEligibilityTests.swift`, `BuildScriptDetectorTests.swift`, `ConversionBackupTests.swift`, `PnpmConverterTests.swift`, `Tests/FeatherweightCoreTests/Support/FakeCommandRunner.swift`
 
 **Interfaces:**
@@ -971,11 +974,12 @@ taking screenshots. There are no UI test targets.
   - `CommandRunner` and `ProcessCommandRunner` (Task 1)
   - `Project`, `PackageManager` and `ActivityChecker` (Task 2)
   - `CloneFS.privateBytes` (Task 3)
-  - `JobRunner.withLock` (Task 7)
-  - `ConfigRewriter` (Task 14), which Task 13 calls through a protocol so it can stub it
-    until Task 14 lands:
-    `protocol ConfigRewriting { func rewriteProject(root: URL, from: PackageManager, pnpmVersion: String) throws -> [FileRewrite] }`
 - Produces:
+  - In `RewriteTypes.swift` (Task 14 implements the rewriter against these, and Task 13's
+    tests use a stub):
+    - `public struct RewriteWarning: Codable, Sendable, Hashable { let file: String; let line: Int; let text: String }`
+    - `public struct FileRewrite: Sendable { let relativePath: String; let original: String; let rewritten: String; let warnings: [RewriteWarning]; var changed: Bool }`
+    - `public protocol ConfigRewriting: Sendable { func rewriteProject(root: URL, from: PackageManager, pnpmVersion: String) throws -> [FileRewrite] }`
   - `public enum Ineligibility: String, Codable, Sendable { case bun, alreadyPnpm, workspaces, recentlyActive, noLockfile }`.
     Each case has a `message`:
     - bun: "pnpm can't import bun lockfiles"
@@ -1029,7 +1033,8 @@ taking screenshots. There are no UI test targets.
     - `init(runner: CommandRunner, paths: AppPaths, rewriter: ConfigRewriting)`
     - `func convert(_ project: Project, runBuildCheck: Bool, progress: @Sendable (ConversionStep) -> Void) throws -> ConversionResult`
     - `func revert(_ project: Project, backup: ConversionBackup) throws`
-- **Convert sequence.** It holds the job lock throughout.
+- **Convert sequence.** The caller, `AppModel` in Task 15, wraps `convert` and `revert`
+  in `JobRunner.withLock`.
   1. **Back up** every file that may change: the old lockfile, `package.json`,
      `pnpm-workspace.yaml`, and every file the rewriter would touch (dry rewrite first).
   2. Measure `before = CloneFS.privateBytes(under: node_modules)`.
@@ -1104,10 +1109,8 @@ taking screenshots. There are no UI test targets.
 - Test: `Tests/FeatherweightCoreTests/CommandRewriterTests.swift`, `ConfigRewriterTests.swift`
 
 **Interfaces:**
-- Consumes: `PackageManager` (Task 2), and the `ConfigRewriting` protocol (Task 13).
+- Consumes: `PackageManager` (Task 2), and `RewriteWarning`, `FileRewrite` and `ConfigRewriting` (Task 13).
 - Produces:
-  - `public struct RewriteWarning: Codable, Sendable, Hashable { let file: String; let line: Int; let text: String }`
-  - `public struct FileRewrite: Sendable { let relativePath: String; let original: String; let rewritten: String; let warnings: [RewriteWarning]; var changed: Bool }`
   - `public enum CommandRewriter { static func rewrite(_ command: String, from: PackageManager, scripts: Set<String>, dependencyBins: Set<String>) -> (String, uncertain: [String]) }`.
     The input is one shell command line. It is split on `&&`, `||`, `;` and `|`, and only
     segments whose first word is `npm`, `npx` or `yarn` are rewritten. The uncertain list
@@ -1200,7 +1203,7 @@ taking screenshots. There are no UI test targets.
 
 **Files:**
 - Create: `Sources/FeatherweightApp/Views/ConvertConfirmSheet.swift`, `Views/ConversionProgressSheet.swift`, `Views/ConversionDoneSheet.swift`, `Views/DiffView.swift`, `Views/InstallPnpmSheet.swift`
-- Modify: `Sources/FeatherweightApp/AppModel.swift` (add `convert`, `revert`, `commitConversion` and `pushConversion`), `Views/ProjectInspector.swift` (wire the buttons)
+- Modify: `Sources/FeatherweightApp/AppModel.swift` (add `convert`, `revert`, `commitConversion` and `pushConversion`; `convert` and `revert` run inside `JobRunner.withLock`, showing "Waiting for another Featherweight job to finish…" while waiting), `Views/ProjectInspector.swift` (wire the buttons)
 
 **Interfaces:**
 - Consumes: `PnpmConverter`, `PnpmToolchain`, `ConversionEligibility`,
