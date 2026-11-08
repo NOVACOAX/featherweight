@@ -1,0 +1,307 @@
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <linearGradient id="fw-bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#334155"/><stop offset="1" stop-color="#0f172a"/></linearGradient>
+    <linearGradient id="fw-hex" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#fde68a"/><stop offset="1" stop-color="#f59e0b"/></linearGradient>
+    <symbol id="fw-logo" viewBox="0 0 200 200">
+      <rect x="4" y="4" width="192" height="192" rx="44" fill="url(#fw-bg)"/>
+      <polygon points="76,52 117.6,76 117.6,124 76,148 34.4,124 34.4,76" fill="none" stroke="#fbbf24" stroke-width="5" stroke-dasharray="10 8" opacity=".45"/>
+      <polygon points="124,52 165.6,76 165.6,124 124,148 82.4,124 82.4,76" fill="none" stroke="#fbbf24" stroke-width="5" stroke-dasharray="10 8" opacity=".45"/>
+      <polygon points="100,56 138,78 138,122 100,144 62,122 62,78" fill="url(#fw-hex)"/>
+      <polygon points="100,56 138,78 100,100 62,78" fill="#fff" opacity=".35"/>
+      <polygon points="100,100 138,78 138,122 100,144" fill="#92400e" opacity=".35"/>
+    </symbol>
+  </defs>
+</svg>
+
+<style>
+  .shot{margin:28px 0 44px}
+  .shot h3{margin-bottom:4px}
+  .win{--bg:#1e1e20;--side:#26262a;--card:#2a2a2e;--line:#3a3a3f;--txt:#f5f5f7;--dim:#9a9aa1;--amber:#f59e0b;--amber2:#fcd34d;
+    font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Helvetica Neue",sans-serif;font-size:13px;color:var(--txt);
+    background:var(--bg);border-radius:12px;overflow:hidden;box-shadow:0 20px 50px rgba(0,0,0,.35),0 0 0 1px rgba(0,0,0,.5);max-width:980px;position:relative}
+  .win *{box-sizing:border-box}
+  .tb{height:44px;display:flex;align-items:center;gap:8px;padding:0 14px;border-bottom:1px solid var(--line);background:#2b2b2f}
+  .dots{display:flex;gap:8px;margin-right:12px}.dots i{width:12px;height:12px;border-radius:50%;display:block}
+  .dots i:nth-child(1){background:#ff5f57}.dots i:nth-child(2){background:#febc2e}.dots i:nth-child(3){background:#28c840}
+  .tb .title{font-weight:600}
+  .tb .sp{flex:1}
+  .grid{display:grid;grid-template-columns:200px 1fr;min-height:520px}
+  .side{background:var(--side);border-right:1px solid var(--line);padding:12px 10px;display:flex;flex-direction:column}
+  .brand{display:flex;align-items:center;gap:8px;padding:4px 6px 14px;font-weight:700;font-size:14px}
+  .nav{padding:6px 10px;border-radius:7px;color:var(--dim);display:flex;gap:9px;align-items:center;margin-bottom:2px}
+  .nav.on{background:rgba(245,158,11,.16);color:var(--amber2)}
+  .nav svg{width:15px;height:15px}
+  .helper{margin-top:auto;border-top:1px solid var(--line);padding:12px 6px 2px;font-size:12px;color:var(--dim)}
+  .helper .row{display:flex;align-items:center;justify-content:space-between;margin-bottom:6px}
+  .ok{display:inline-block;width:7px;height:7px;border-radius:50%;background:#30d158;margin-right:6px}
+  .tog{width:30px;height:18px;border-radius:9px;background:var(--amber);position:relative}
+  .tog:after{content:"";position:absolute;right:2px;top:2px;width:14px;height:14px;border-radius:50%;background:#fff}
+  .tog.off{background:#48484d}.tog.off:after{right:auto;left:2px}
+  .main{padding:22px 26px}
+  .label{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--dim);font-weight:600}
+  .hero{display:flex;gap:28px;align-items:flex-end;margin-bottom:20px}
+  .big{font-size:44px;font-weight:700;letter-spacing:-.02em;line-height:1}
+  .big small{font-size:18px;font-weight:600;color:var(--dim);margin-left:4px}
+  .split{height:8px;border-radius:4px;display:flex;overflow:hidden;background:#3a3a3f;margin:10px 0 6px;width:340px}
+  .legend{display:flex;gap:16px;font-size:12px;color:var(--dim)}
+  .sw{display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:5px}
+  .disk{margin-left:auto;text-align:right}
+  .meter{width:200px;height:6px;border-radius:3px;background:#3a3a3f;margin:6px 0 4px auto;overflow:hidden}
+  .meter b{display:block;height:100%;width:91%;background:linear-gradient(90deg,#ff9f0a,#ff453a)}
+  .cards2{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:20px}
+  .jc{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px 16px}
+  .jc h4{margin:0 0 2px;font-size:14px}
+  .jc p{margin:0 0 12px;color:var(--dim);font-size:12px}
+  .kv{display:grid;grid-template-columns:62px 1fr;gap:4px 8px;font-size:12px;margin-bottom:14px}
+  .kv span:nth-child(odd){color:var(--dim)}
+  .btns{display:flex;gap:8px}
+  .b{padding:5px 12px;border-radius:6px;font-size:12.5px;font-weight:500;background:#3a3a3f;color:var(--txt);border:1px solid #4a4a50;display:inline-block;white-space:nowrap}
+  .b.pri{background:var(--amber);border-color:var(--amber);color:#1c1300;font-weight:600}
+  .b.dis{opacity:.4}
+  .list .it{display:flex;gap:10px;align-items:center;padding:9px 0;border-bottom:1px solid var(--line);font-size:12.5px}
+  .list .it:last-child{border-bottom:0}
+  .ic{width:24px;height:24px;border-radius:6px;display:grid;place-items:center;font-size:12px;flex:none}
+  .when{margin-left:auto;color:var(--dim);font-size:12px}
+  .gain{color:var(--amber2);font-weight:600;margin-left:8px}
+  table.t{width:100%;border-collapse:collapse;font-size:12.5px}
+  .t th{text-align:left;font-weight:500;color:var(--dim);font-size:11.5px;padding:6px 8px;border-bottom:1px solid var(--line)}
+  .t td{padding:8px;border-bottom:1px solid #303034;white-space:nowrap}
+  .t tr.sel td{background:rgba(245,158,11,.12)}
+  .t .num{text-align:right;font-variant-numeric:tabular-nums}
+  .pm{font-size:10.5px;font-weight:600;padding:2px 6px;border-radius:4px}
+  .npm{background:#3b1d1d;color:#ff8a80}.pnpm{background:#3a2e10;color:#fcd34d}.bun{background:#2e2a24;color:#f4e3c1}
+  .st{font-size:11.5px;padding:2px 7px;border-radius:10px}
+  .st.ok2{background:rgba(48,209,88,.14);color:#4ade80}.st.wait{background:rgba(255,159,10,.15);color:#ffb340}.st.info{background:#33333a;color:var(--dim)}
+  .sub td:first-child{padding-left:26px;color:var(--dim)}
+  .search{background:#1e1e20;border:1px solid var(--line);border-radius:6px;padding:4px 10px;color:var(--dim);font-size:12px;width:200px}
+  .seg{display:flex;border:1px solid var(--line);border-radius:6px;overflow:hidden;font-size:12px}
+  .seg span{padding:3px 10px;color:var(--dim)}.seg span.on{background:#45454b;color:var(--txt)}
+  .insp{margin-top:16px;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px 16px;display:flex;align-items:center;gap:16px}
+  .insp .path{color:var(--dim);font-size:12px;margin-top:2px}
+  .insp .btns{margin-left:auto}
+  .dimmed{filter:brightness(.45)}
+  .sheet{position:absolute;left:50%;top:44px;transform:translateX(-50%);width:460px;background:#2c2c30;border:1px solid #4a4a50;border-top:0;border-radius:0 0 12px 12px;box-shadow:0 24px 60px rgba(0,0,0,.6);padding:20px 22px}
+  .sheet h4{margin:0 0 4px;font-size:15px}
+  .sheet p{color:var(--dim);margin:0 0 14px;font-size:12.5px;line-height:1.45}
+  .steps{margin:0 0 14px;padding:0;list-style:none;font-size:12.5px}
+  .steps li{display:flex;gap:10px;padding:5px 0;align-items:flex-start}
+  .steps .n{width:18px;height:18px;border-radius:50%;background:#45454b;display:grid;place-items:center;font-size:10.5px;flex:none}
+  .steps .n.done{background:#30d158;color:#062}
+  .warn{background:rgba(255,159,10,.1);border:1px solid rgba(255,159,10,.3);border-radius:8px;padding:9px 11px;font-size:12px;color:#ffcf80;margin-bottom:16px}
+  .foot{display:flex;gap:8px;justify-content:flex-end}
+  .foot .l{margin-right:auto}
+  .files{background:#1e1e20;border:1px solid var(--line);border-radius:8px;font-family:ui-monospace,Menlo,monospace;font-size:11.5px;padding:8px 10px;margin-bottom:10px;line-height:1.7}
+  .files .d{color:#ff6b6b}.files .a{color:#4ade80}
+  .input{background:#1e1e20;border:1px solid var(--line);border-radius:6px;padding:6px 10px;font-size:12.5px;margin-bottom:14px}
+  .remote{font-size:12px;color:var(--dim);margin-bottom:14px}
+  .set{display:grid;grid-template-columns:190px 1fr;gap:18px 20px;padding:22px 28px;font-size:12.5px}
+  .set .k{color:var(--dim);text-align:right;padding-top:3px}
+  .box{background:var(--card);border:1px solid var(--line);border-radius:8px}
+  .box .r{display:flex;align-items:center;gap:10px;padding:7px 10px;border-bottom:1px solid #303034}
+  .box .r:last-child{border-bottom:0}
+  .pm-btn{display:flex;gap:0;margin-top:6px}.pm-btn span{width:24px;height:20px;border:1px solid var(--line);display:grid;place-items:center;color:var(--dim);font-size:13px;background:#2a2a2e}
+  .ck{width:14px;height:14px;border-radius:4px;background:var(--amber);display:grid;place-items:center;color:#1c1300;font-size:10px;font-weight:800;flex:none}
+  .ck.no{background:#3a3a3f;border:1px solid #55555b}
+  .chips{display:grid;grid-template-columns:repeat(3,auto);gap:8px 22px;justify-content:start}
+  .chips label{display:flex;gap:7px;align-items:center;font-family:ui-monospace,Menlo,monospace;font-size:12px}
+  .note{color:var(--dim);font-size:11.5px;margin-top:8px}
+  .pop{background:#1e1e20;border:1px solid var(--line);border-radius:6px;padding:3px 9px;display:inline-block}
+  .welcome{display:flex;flex-direction:column;align-items:center;text-align:center;padding:38px 40px 30px}
+  .welcome h2{margin:14px 0 4px;color:var(--txt);font-size:24px}
+  .welcome .tag{color:var(--dim);margin-bottom:24px}
+  .pick{display:flex;gap:10px;align-items:center;background:var(--card);border:1px solid var(--line);border-radius:8px;padding:10px 12px;width:440px;text-align:left;margin-bottom:12px}
+  .found{width:440px;text-align:left;background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.3);border-radius:8px;padding:12px 14px;margin-bottom:22px;font-size:12.5px;line-height:1.5}
+  .found b{color:var(--amber2)}
+</style>
+
+<h2>Featherweight: app screens</h2>
+<p class="subtitle">A first look at the main screens, shown in dark mode. The real app follows your Mac's light or dark setting. The numbers are realistic estimates from your Developer folder.</p>
+
+<!-- 1. Overview -->
+<div class="shot">
+<h3>1 · Overview: what you see when you open the app</h3>
+<p class="subtitle">Total space saved, your drive's free space, both jobs with Run buttons, and recent activity. The sidebar shows the background helper's status and a pause switch.</p>
+<div class="win">
+  <div class="tb"><div class="dots"><i></i><i></i><i></i></div><span class="title">Overview</span><span class="sp"></span></div>
+  <div class="grid">
+    <div class="side">
+      <div class="brand"><svg width="22" height="22"><use href="#fw-logo"/></svg>Featherweight</div>
+      <div class="nav on"><svg viewBox="0 0 16 16" fill="currentColor"><rect x="1" y="1" width="6" height="6" rx="1.5"/><rect x="9" y="1" width="6" height="6" rx="1.5"/><rect x="1" y="9" width="6" height="6" rx="1.5"/><rect x="9" y="9" width="6" height="6" rx="1.5"/></svg>Overview</div>
+      <div class="nav"><svg viewBox="0 0 16 16" fill="currentColor"><path d="M1 3.5A1.5 1.5 0 0 1 2.5 2h3.6l1.5 1.5h5.9A1.5 1.5 0 0 1 15 5v7.5a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 1 12.5z"/></svg>Projects<span style="margin-left:auto;font-size:11px">23</span></div>
+      <div class="nav"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="8" cy="8" r="6.2"/><path d="M8 4.5V8l2.5 1.5"/></svg>Activity</div>
+      <div class="helper">
+        <div class="row"><span><span class="ok"></span>Running in background</span></div>
+        <div class="row"><span>Automatic cleanup</span><span class="tog"></span></div>
+      </div>
+    </div>
+    <div class="main">
+      <div class="hero">
+        <div>
+          <div class="label">Space reclaimed</div>
+          <div class="big">15.2<small>GB</small></div>
+          <div class="split"><div style="width:18%;background:#f59e0b"></div><div style="width:82%;background:#fcd34d;opacity:.55"></div></div>
+          <div class="legend"><span><i class="sw" style="background:#f59e0b"></i>Shared duplicates 2.8 GB</span><span><i class="sw" style="background:#fcd34d;opacity:.6"></i>Build caches cleared 12.4 GB</span></div>
+        </div>
+        <div class="disk">
+          <div class="label">Macintosh HD</div>
+          <div style="font-size:20px;font-weight:600;margin-top:6px">39.6 GB free</div>
+          <div class="meter"><b></b></div>
+          <div style="font-size:12px;color:var(--dim)">of 460 GB</div>
+        </div>
+      </div>
+
+      <div class="cards2">
+        <div class="jc">
+          <h4>Share duplicates</h4>
+          <p>Identical files across node_modules share one copy on disk.</p>
+          <div class="kv"><span>Last run</span><span>Today, 3:00 AM · freed 120 MB</span><span>Next</span><span>After your next install · daily at 3:00 AM</span></div>
+          <div class="btns"><span class="b pri">Run now</span><span class="b">Preview</span></div>
+        </div>
+        <div class="jc">
+          <h4>Clear build caches</h4>
+          <p>Deletes .next, .vite, .turbo and the other cache folders you've chosen.</p>
+          <div class="kv"><span>Last run</span><span>Sun, 3:00 AM · freed 4.6 GB</span><span>Next</span><span>Sun 15 Nov, 3:00 AM</span></div>
+          <div class="btns"><span class="b pri">Clear now</span><span class="b">Preview</span></div>
+        </div>
+      </div>
+
+      <div class="label" style="margin-bottom:4px">Recent activity</div>
+      <div class="list">
+        <div class="it"><span class="ic" style="background:rgba(245,158,11,.18);color:#fcd34d">⧉</span>Shared duplicates after install in <b>&nbsp;linkbreeze</b><span class="gain">+340 MB</span><span class="when">2 h ago</span></div>
+        <div class="it"><span class="ic" style="background:rgba(48,209,88,.15);color:#4ade80">✓</span>Converted <b>&nbsp;hughvies&nbsp;</b> to pnpm and pushed to GitHub<span class="gain">+180 MB</span><span class="when">Yesterday</span></div>
+        <div class="it"><span class="ic" style="background:rgba(245,158,11,.18);color:#fcd34d">✦</span>Weekly cache clear · 9 projects, 2 skipped (active)<span class="gain">+4.6 GB</span><span class="when">Sun</span></div>
+      </div>
+    </div>
+  </div>
+</div>
+</div>
+
+<!-- 2. Projects -->
+<div class="shot">
+<h3>2 · Projects: every project it found, and what it did to each</h3>
+<p class="subtitle">Select a project to see its actions: Convert to pnpm, Clear caches, Show in Finder. Skipped projects say why. Nested folders such as <code>functions</code> appear under their parent.</p>
+<div class="win">
+  <div class="tb"><div class="dots"><i></i><i></i><i></i></div><span class="title">Projects</span><span class="sp"></span><div class="seg"><span class="on">All</span><span>npm</span><span>pnpm</span><span>yarn</span><span>bun</span></div><span class="search">⌕ Search projects</span></div>
+  <div class="grid">
+    <div class="side">
+      <div class="brand"><svg width="22" height="22"><use href="#fw-logo"/></svg>Featherweight</div>
+      <div class="nav"><svg viewBox="0 0 16 16" fill="currentColor"><rect x="1" y="1" width="6" height="6" rx="1.5"/><rect x="9" y="1" width="6" height="6" rx="1.5"/><rect x="1" y="9" width="6" height="6" rx="1.5"/><rect x="9" y="9" width="6" height="6" rx="1.5"/></svg>Overview</div>
+      <div class="nav on"><svg viewBox="0 0 16 16" fill="currentColor"><path d="M1 3.5A1.5 1.5 0 0 1 2.5 2h3.6l1.5 1.5h5.9A1.5 1.5 0 0 1 15 5v7.5a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 1 12.5z"/></svg>Projects<span style="margin-left:auto;font-size:11px">23</span></div>
+      <div class="nav"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="8" cy="8" r="6.2"/><path d="M8 4.5V8l2.5 1.5"/></svg>Activity</div>
+      <div class="helper"><div class="row"><span><span class="ok"></span>Running in background</span></div><div class="row"><span>Automatic cleanup</span><span class="tog"></span></div></div>
+    </div>
+    <div class="main" style="padding:14px 18px">
+      <table class="t">
+        <tr><th>Project</th><th>Manager</th><th class="num">node_modules</th><th class="num">Shared</th><th class="num">Caches</th><th>Last active</th><th>Status</th></tr>
+        <tr class="sel"><td><b>linkbreeze</b></td><td><span class="pm npm">npm</span></td><td class="num">824 MB</td><td class="num">340 MB</td><td class="num">571 MB</td><td>2 hours ago</td><td><span class="st wait">Skipped: active</span></td></tr>
+        <tr><td><b>spin-and-gears</b></td><td><span class="pm pnpm">pnpm</span></td><td class="num">1.0 GB</td><td class="num">via pnpm</td><td class="num">0 B</td><td>5 days ago</td><td><span class="st ok2">Cleared 4.0 GB</span></td></tr>
+        <tr><td><b>MAgPIE Studio</b></td><td><span class="pm pnpm">pnpm</span></td><td class="num">839 MB</td><td class="num">via pnpm</td><td class="num">40 MB</td><td>1 week ago</td><td><span class="st info">.output kept</span></td></tr>
+        <tr><td><b>ej-and-associates</b></td><td><span class="pm pnpm">pnpm</span></td><td class="num">716 MB</td><td class="num">via pnpm</td><td class="num">553 MB</td><td>2 weeks ago</td><td><span class="st info">.output kept</span></td></tr>
+        <tr class="sub"><td>functions</td><td><span class="pm npm">npm</span></td><td class="num">93 MB</td><td class="num">61 MB</td><td class="num">0 B</td><td>2 weeks ago</td><td><span class="st ok2">Up to date</span></td></tr>
+        <tr><td><b>hugh-herschell-folio</b></td><td><span class="pm bun">bun</span></td><td class="num">659 MB</td><td class="num">241 MB</td><td class="num">0 B</td><td>3 weeks ago</td><td><span class="st ok2">Up to date</span></td></tr>
+        <tr><td><b>artwork-kenya</b></td><td><span class="pm npm">npm</span></td><td class="num">512 MB</td><td class="num">198 MB</td><td class="num">0 B</td><td>1 month ago</td><td><span class="st ok2">Up to date</span></td></tr>
+        <tr class="sub"><td>functions</td><td><span class="pm npm">npm</span></td><td class="num">97 MB</td><td class="num">64 MB</td><td class="num">0 B</td><td>1 month ago</td><td><span class="st ok2">Up to date</span></td></tr>
+      </table>
+      <div class="insp">
+        <svg width="34" height="34" viewBox="0 0 16 16" fill="#f59e0b"><path d="M1 3.5A1.5 1.5 0 0 1 2.5 2h3.6l1.5 1.5h5.9A1.5 1.5 0 0 1 15 5v7.5a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 1 12.5z"/></svg>
+        <div><b>linkbreeze</b><div class="path">~/Developer/linkbreeze · git: main · github.com/…/linkbreeze</div></div>
+        <div class="btns"><span class="b">Show in Finder</span><span class="b dis" title="Active in the last 24 hours">Clear caches</span><span class="b pri">Convert to pnpm…</span></div>
+      </div>
+    </div>
+  </div>
+</div>
+</div>
+
+<!-- 3. Convert sheet -->
+<div class="shot">
+<h3>3 · Convert to pnpm: before and after</h3>
+<p class="subtitle">On the left, the confirmation sheet with the exact steps and the warning about collaborators. On the right, what you see when it's done: the files that changed and the commit/push offer.</p>
+<div class="split" style="display:grid;grid-template-columns:1fr 1fr;gap:16px;height:auto;background:none;width:auto;margin:0">
+  <div class="win" style="height:470px">
+    <div class="tb"><div class="dots"><i></i><i></i><i></i></div><span class="title">Projects</span></div>
+    <div class="dimmed" style="padding:16px;color:#888;font-size:12px;line-height:2.2">linkbreeze<br>spin-and-gears<br>MAgPIE Studio<br>ej-and-associates<br>hugh-herschell-folio<br>artwork-kenya</div>
+    <div class="sheet" style="width:88%">
+      <h4>Convert linkbreeze to pnpm?</h4>
+      <p>Your installed versions stay exactly the same. pnpm keeps one shared copy of each package, so this project will use less space.</p>
+      <ul class="steps">
+        <li><span class="n">1</span>Back up <code>package-lock.json</code> so you can revert</li>
+        <li><span class="n">2</span>Create <code>pnpm-lock.yaml</code> from it (<code>pnpm import</code>)</li>
+        <li><span class="n">3</span>Reinstall node_modules with pnpm</li>
+        <li><span class="n">4</span>Check that the project's install succeeded</li>
+      </ul>
+      <div class="warn">Anyone who clones this project from GitHub will need pnpm to install it.</div>
+      <div class="foot"><span class="b">Cancel</span><span class="b pri">Convert</span></div>
+    </div>
+  </div>
+  <div class="win" style="height:470px">
+    <div class="tb"><div class="dots"><i></i><i></i><i></i></div><span class="title">Projects</span></div>
+    <div class="dimmed" style="padding:16px;color:#888;font-size:12px;line-height:2.2">linkbreeze<br>spin-and-gears<br>MAgPIE Studio<br>ej-and-associates<br>hugh-herschell-folio<br>artwork-kenya</div>
+    <div class="sheet" style="width:88%">
+      <h4>linkbreeze now uses pnpm</h4>
+      <p>Freed 410 MB. Your project installed cleanly. Commit the change?</p>
+      <div class="files"><span class="d">− package-lock.json</span><br><span class="a">+ pnpm-lock.yaml</span></div>
+      <div class="input">Switch from npm to pnpm</div>
+      <div class="remote">Pushes to <b style="color:var(--txt)">origin/main</b> · github.com/…/linkbreeze</div>
+      <div class="foot"><span class="b l">Revert</span><span class="b">Not now</span><span class="b">Commit</span><span class="b pri">Commit &amp; Push</span></div>
+    </div>
+  </div>
+</div>
+</div>
+
+<!-- 4. Settings -->
+<div class="shot">
+<h3>4 · Settings (⌘,): what makes it work for anyone</h3>
+<p class="subtitle">Projects folders, which cache folders to clear, schedules, the activity window, notifications and start at login.</p>
+<div class="win" style="max-width:720px">
+  <div class="tb"><div class="dots"><i></i><i></i><i></i></div><span class="title">Settings</span></div>
+  <div class="set">
+    <div class="k">Projects folders</div>
+    <div><div class="box"><div class="r">📁 ~/Developer</div><div class="r" style="color:var(--dim)">📁 ~/Work/client-sites</div></div><div class="pm-btn"><span>+</span><span>−</span></div></div>
+
+    <div class="k">Cache folders to clear</div>
+    <div>
+      <div class="chips">
+        <label><span class="ck">✓</span>.next</label><label><span class="ck">✓</span>.nuxt</label><label><span class="ck">✓</span>.vite</label>
+        <label><span class="ck">✓</span>.turbo</label><label><span class="ck">✓</span>.parcel-cache</label><label><span class="ck">✓</span>.cache</label>
+        <label><span class="ck">✓</span>node_modules/.cache</label><label><span class="ck">✓</span>node_modules/.vite</label><label><span class="ck no"></span>.output</label>
+      </div>
+      <div class="note">.output is off by default because many projects deploy from it. <span style="color:var(--amber2)">Add folder name…</span></div>
+      <div class="note">Folders tracked in git are never cleared.</div>
+    </div>
+
+    <div class="k">Share duplicates</div>
+    <div>After installs, and a full sweep <span class="pop">Daily ▾</span> at <span class="pop">3:00 AM ▾</span></div>
+
+    <div class="k">Clear build caches</div>
+    <div><span class="pop">Weekly ▾</span> on <span class="pop">Sunday ▾</span> at <span class="pop">3:00 AM ▾</span></div>
+
+    <div class="k">Leave projects alone if active within</div>
+    <div><span class="pop">24 hours ▾</span></div>
+
+    <div class="k">General</div>
+    <div style="display:grid;gap:8px">
+      <label style="display:flex;gap:8px;align-items:center"><span class="ck">✓</span>Run in background when I log in</label>
+      <label style="display:flex;gap:8px;align-items:center"><span class="ck">✓</span>Show notifications</label>
+      <label style="display:flex;gap:8px;align-items:center"><span class="ck">✓</span>Check GitHub for new versions</label>
+      <label style="display:flex;gap:8px;align-items:center"><span class="ck">✓</span>Install the <code>featherweight</code> terminal command</label>
+    </div>
+  </div>
+</div>
+</div>
+
+<!-- 5. Welcome -->
+<div class="shot">
+<h3>5 · First launch</h3>
+<p class="subtitle">Pick your projects folder. It scans and shows what it can free before changing anything.</p>
+<div class="win" style="max-width:560px">
+  <div class="tb"><div class="dots"><i></i><i></i><i></i></div></div>
+  <div class="welcome">
+    <svg width="88" height="88"><use href="#fw-logo"/></svg>
+    <h2>Featherweight</h2>
+    <div class="tag">node_modules, but light.</div>
+    <div class="pick">📁 <div style="flex:1"><b>~/Developer</b><div style="color:var(--dim);font-size:12px">Where your projects live</div></div><span class="b">Change…</span></div>
+    <div class="found">Found <b>23 projects</b>. About <b>2.8 GB</b> of duplicate files can be shared, and <b>12.6 GB</b> of build caches can be cleared. Nothing has been changed yet.</div>
+    <div class="btns"><span class="b">Customise settings</span><span class="b pri">Start saving space</span></div>
+  </div>
+</div>
+</div>
