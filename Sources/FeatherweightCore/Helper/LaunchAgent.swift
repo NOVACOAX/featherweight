@@ -71,6 +71,23 @@ public struct LaunchAgent: Sendable {
         FileManager.default.fileExists(atPath: plistURL.path)
     }
 
+    /// The helper path the installed plist launches, or nil when nothing is installed or the plist
+    /// cannot be read.
+    public func installedHelperPath() -> String? {
+        guard let data = try? Data(contentsOf: plistURL),
+              let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any]
+        else { return nil }
+        return (plist["ProgramArguments"] as? [String])?.first
+    }
+
+    /// True when the agent is installed but launches a different helper than `helperExecutable`
+    /// (the app was moved or replaced), so the app should install it again. A missing agent is
+    /// left alone: the user may have switched it off.
+    public func needsReinstall(helperExecutable: URL) -> Bool {
+        guard let installed = installedHelperPath() else { return false }
+        return installed != helperExecutable.path
+    }
+
     private func bootout() {
         _ = try? runner.run(Self.launchctl, ["bootout", "\(domain)/\(Self.label)"], in: nil)
     }

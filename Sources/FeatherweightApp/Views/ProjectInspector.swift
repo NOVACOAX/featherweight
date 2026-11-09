@@ -56,12 +56,6 @@ struct ProjectInspector: View {
             }
             .disabled(skipReason != nil || busy)
             .help(skipReason ?? (busy ? "Another job is running" : "Delete this project's build caches"))
-
-            // Converting arrives with the conversion flow; until then the button only says so.
-            if project.packageManager == .npm || project.packageManager == .yarn {
-                Button("Convert to pnpm…") { model.notice = "Converting to pnpm is coming soon." }
-                    .buttonStyle(AmberButtonStyle())
-            }
         }
         .fixedSize()
     }
