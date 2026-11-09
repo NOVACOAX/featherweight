@@ -213,7 +213,7 @@ import Testing
 
     // MARK: - Safety
 
-    @Test(arguments: ["", ".", "..", "../sibling", "a/../..", "./", "/etc", ".git", "node_modules", "a//b", "x/.git/y"])
+    @Test(arguments: ["", ".", "..", "../sibling", "a/../..", "./", "/etc", ".git", "node_modules", "a//b", "x/.git/y", ".GIT", ".Git/x", "a/.gIt/b", "NODE_MODULES", "Node_Modules"])
     func unsafeRelativePathsAreRejected(path: String) {
         #expect(!CacheFolderSetting.isSafeRelativePath(path))
     }
@@ -223,7 +223,7 @@ import Testing
         #expect(CacheFolderSetting.isSafeRelativePath(path))
     }
 
-    @Test(arguments: ["", ".", "../sibling", "a/../..", ".git", "node_modules"])
+    @Test(arguments: ["", ".", "../sibling", "a/../..", ".git", "node_modules", ".GIT", ".Git/x", "NODE_MODULES", "Node_Modules"])
     func unsafeConfiguredPathsNeverDeleteAnything(path: String) throws {
         let tree = try TempTree([
             "proj/src/index.ts": "x", "proj/node_modules/pkg/index.js": "z", "sibling/keep.txt": "k",
@@ -405,6 +405,93 @@ import Testing
         #expect(exists(tree.url("outside/keep")))
         #expect(report.cleared.isEmpty)
         #expect(report.skipped.first?.skip == .pathChanged)
+    }
+}
+
+extension CacheCleanerTests {
+    @Test func cacheFolderThatIsItselfARepositoryIsNeverRemoved() throws {
+        let tree = try TempTree(["src/index.ts": "x", ".next/page.js": "y", ".next/sub/deep.js": "z"])
+        defer { tree.remove() }
+        try GitFixture.initRepo(tree.url(".next"))
+        try tree.setAllMTimes(to: Date(timeIntervalSinceNow: -30 * 24 * 3600))
+
+        let report = CacheCleaner(git: GitClient(runner: GitFixture.runner), activity: ActivityChecker())
+            .run(projects: [Project(root: tree.root, parentRoot: nil, packageManager: .npm, nodeModules: nil)],
+                 settings: Settings.defaults(home: tree.root), dryRun: false)
+
+        #expect(FileManager.default.fileExists(atPath: tree.url(".next/page.js").path))
+        #expect(FileManager.default.fileExists(atPath: tree.url(".next/.git").path))
+        #expect(report.skipped.first?.skip == .containsRepository)
+        #expect(report.cleared.isEmpty)
+    }
+
+    @Test func repositoryNestedDeeperInsideACacheFolderIsNeverRemoved() throws {
+        let tree = try TempTree(["src/index.ts": "x", "node_modules/.cache/clone/a.js": "y"])
+        defer { tree.remove() }
+        try GitFixture.initRepo(tree.url("node_modules/.cache/clone"))
+        // A gitfile (as submodules and worktrees use) counts too.
+        try tree.add([".vite/sub/.git": "gitdir: ../elsewhere\n"])
+        try tree.setAllMTimes(to: Date(timeIntervalSinceNow: -30 * 24 * 3600))
+
+        let report = CacheCleaner(git: GitClient(runner: GitFixture.runner), activity: ActivityChecker())
+            .run(projects: [Project(root: tree.root, parentRoot: nil, packageManager: .npm, nodeModules: nil)],
+                 settings: Settings.defaults(home: tree.root), dryRun: false)
+
+        #expect(FileManager.default.fileExists(atPath: tree.url("node_modules/.cache/clone/a.js").path))
+        #expect(FileManager.default.fileExists(atPath: tree.url(".vite/sub/.git").path))
+        #expect(report.cleared.isEmpty)
+        #expect(Set(report.skipped.compactMap(\.skip)) == [.containsRepository])
+    }
+
+    @Test func cacheFolderTrackedByANestedInnerRepositoryIsNeverRemoved() throws {
+        let tree = try TempTree(["proj/src/index.ts": "x", "proj/pkg/.cache/keep.txt": "k", "proj/pkg/lib.js": "l"])
+        defer { tree.remove() }
+        // The project is not in any repository; an independent repo lives in proj/pkg and tracks .cache.
+        try GitFixture.initRepo(tree.url("proj/pkg"))
+        try tree.setAllMTimes(to: Date(timeIntervalSinceNow: -30 * 24 * 3600))
+        var s = Settings.defaults(home: tree.root)
+        s.cacheFolders = [CacheFolderSetting(relativePath: "pkg/.cache", enabled: true, isBuiltIn: false)]
+
+        let report = CacheCleaner(git: GitClient(runner: GitFixture.runner), activity: ActivityChecker())
+            .run(projects: [Project(root: tree.url("proj"), parentRoot: nil, packageManager: .npm, nodeModules: nil)],
+                 settings: s, dryRun: false)
+
+        #expect(FileManager.default.fileExists(atPath: tree.url("proj/pkg/.cache/keep.txt").path))
+        #expect(report.skipped.first?.skip == .trackedInGit)
+        #expect(report.cleared.isEmpty)
+    }
+
+    @Test func danglingGitFileIsAnErrorNotAnAbsentRepository() throws {
+        let tree = try TempTree(["src/index.ts": "x", ".next/a": "y", ".git": "gitdir: /nonexistent/moved/repo\n"])
+        defer { tree.remove() }
+        try tree.setAllMTimes(to: Date(timeIntervalSinceNow: -30 * 24 * 3600))
+
+        let report = CacheCleaner(git: GitClient(runner: GitFixture.runner), activity: ActivityChecker())
+            .run(projects: [Project(root: tree.root, parentRoot: nil, packageManager: .npm, nodeModules: nil)],
+                 settings: Settings.defaults(home: tree.root), dryRun: false)
+
+        #expect(FileManager.default.fileExists(atPath: tree.url(".next/a").path))
+        #expect(report.cleared.isEmpty)
+        #expect(report.skipped.first?.skip == .gitUnavailable)
+        #expect(!report.errors.isEmpty)
+    }
+
+    @Test(arguments: [".GIT", ".Git", "NODE_MODULES", "Node_Modules"])
+    func caseVariantsOfProtectedNamesAreNeverDeleted(name: String) throws {
+        let tree = try TempTree(["src/index.ts": "x", "node_modules/pkg/i.js": "z"])
+        defer { tree.remove() }
+        try GitFixture.git(["init", "-q", "-b", "main"], in: tree.root)
+        try tree.setAllMTimes(to: Date(timeIntervalSinceNow: -30 * 24 * 3600))
+        var s = Settings.defaults(home: tree.root)
+        s.cacheFolders = [CacheFolderSetting(relativePath: name, enabled: true, isBuiltIn: false)]
+
+        let report = CacheCleaner(git: GitClient(runner: GitFixture.runner), activity: ActivityChecker())
+            .run(projects: [Project(root: tree.root, parentRoot: nil, packageManager: .npm, nodeModules: nil)],
+                 settings: s, dryRun: false)
+
+        #expect(report.cleared.isEmpty)
+        #expect(FileManager.default.fileExists(atPath: tree.url(".git").path))
+        #expect(FileManager.default.fileExists(atPath: tree.url("node_modules/pkg/i.js").path))
     }
 }
 

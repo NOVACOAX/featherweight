@@ -8,6 +8,9 @@ public enum SkipReason: String, Codable, Sendable {
     /// At removal time the folder was no longer a plain directory inside the project (it was
     /// replaced by a symlink, say).
     case pathChanged
+    /// The folder contains a `.git` entry (a nested repository or submodule), whose tracking the
+    /// cleaner does not inspect, so it is never removed.
+    case containsRepository
 }
 
 public struct CacheCandidate: Codable, Sendable, Hashable {
@@ -51,14 +54,26 @@ public struct CleanReport: Codable, Sendable, Equatable {
 extension CacheFolderSetting {
     /// True when `path` can safely name a cache folder inside a project: relative, no empty, `.`
     /// or `..` components (so it cannot reach the project root or anything outside it), no `.git`
-    /// component, and not `node_modules` itself (only folders inside it).
+    /// component, and not `node_modules` itself (only folders inside it). Names are compared
+    /// case-insensitively and Unicode-normalised, because the default macOS volume treats `.GIT`
+    /// as `.git`.
     public static func isSafeRelativePath(_ path: String) -> Bool {
         guard !path.isEmpty, !path.hasPrefix("/") else { return false }
         let components = path.split(separator: "/", omittingEmptySubsequences: false)
-        if components.contains(where: { $0.isEmpty || $0 == "." || $0 == ".." || $0 == ".git" }) {
+        if components.contains(where: { $0.isEmpty || $0 == "." || $0 == ".." || isGitName($0) }) {
             return false
         }
-        return path != "node_modules"
+        return foldedName(path) != "node_modules"
+    }
+
+    /// Case-folded, canonically normalised form of a file name, for comparing names the way a
+    /// case-insensitive, normalisation-insensitive file system does.
+    fileprivate static func foldedName<S: StringProtocol>(_ name: S) -> String {
+        String(name).precomposedStringWithCanonicalMapping.folding(options: .caseInsensitive, locale: nil)
+    }
+
+    fileprivate static func isGitName<S: StringProtocol>(_ name: S) -> Bool {
+        foldedName(name) == ".git"
     }
 }
 
@@ -168,7 +183,7 @@ public struct CacheCleaner: Sendable {
                     projectRoot: project.root.path,
                     folder: folder.path,
                     relativePath: setting.relativePath,
-                    allocatedBytes: Self.allocatedBytes(of: folder),
+                    allocatedBytes: Self.scan(folder).bytes,
                     skip: setting.enabled ? nil : .notEnabled
                 )
                 if setting.enabled {
@@ -199,10 +214,16 @@ public struct CacheCleaner: Sendable {
         // Not provably a plain directory inside the project any more: leave it alone.
         guard Self.isPlainDirectoryInside(folder, relativePath: candidate.relativePath, root: project.root)
         else { return .skip(.pathChanged) }
+        // A nested repository or submodule inside the folder: its tracking is not inspected.
+        if Self.scan(folder).containsGit { return .skip(.containsRepository) }
         do {
+            // Ask the project's repository and, when different, the innermost repository around
+            // the folder (an independent repo between the project and the folder).
             if state.repoRoot == nil { state.repoRoot = .some(try git.findRepoRoot(for: project.root)) }
-            if let root = state.repoRoot!, try git.checkTracked(folder, repoRoot: root) {
-                return .skip(.trackedInGit)
+            let outer = state.repoRoot!
+            let inner = try git.findRepoRoot(for: folder)
+            for root in [outer, inner == outer ? nil : inner] {
+                if let root, try git.checkTracked(folder, repoRoot: root) { return .skip(.trackedInGit) }
             }
         } catch {
             return .gitError("\(candidate.folder): git check failed, skipped (\(error))")
@@ -221,21 +242,31 @@ public struct CacheCleaner: Sendable {
               let physicalFolder = PhysicalPath.resolve(folder.path),
               let physicalRoot = PhysicalPath.resolve(root.path)
         else { return false }
-        let expected = (physicalRoot.hasSuffix("/") ? physicalRoot : physicalRoot + "/") + relativePath
-        return physicalFolder.caseInsensitiveCompare(expected) == .orderedSame
+        // The root prefix must match exactly (a case-insensitive match could land in a different
+        // directory on a case-sensitive volume). Only the part below the root is compared
+        // case-insensitively, since the on-disk spelling may differ from the configured one.
+        let prefix = physicalRoot.hasSuffix("/") ? physicalRoot : physicalRoot + "/"
+        guard physicalFolder.hasPrefix(prefix) else { return false }
+        let remainder = String(physicalFolder.dropFirst(prefix.count))
+        return CacheFolderSetting.isSafeRelativePath(remainder)
+            && CacheFolderSetting.foldedName(remainder) == CacheFolderSetting.foldedName(relativePath)
     }
 
-    private static func allocatedBytes(of folder: URL) -> Int64 {
+    /// Allocated size of everything under `folder`, and whether any entry in it (file or
+    /// directory, at any depth) is named `.git`. Symlinks are not followed.
+    private static func scan(_ folder: URL) -> (bytes: Int64, containsGit: Bool) {
         let keys: [URLResourceKey] = [.totalFileAllocatedSizeKey, .fileAllocatedSizeKey]
         guard let enumerator = FileManager.default.enumerator(
             at: folder, includingPropertiesForKeys: keys, options: []
-        ) else { return 0 }
+        ) else { return (0, false) }
         var total: Int64 = 0
+        var containsGit = false
         for case let url as URL in enumerator {
+            if CacheFolderSetting.isGitName(url.lastPathComponent) { containsGit = true }
             guard let values = try? url.resourceValues(forKeys: Set(keys)) else { continue }
             total += Int64(values.totalFileAllocatedSize ?? values.fileAllocatedSize ?? 0)
         }
-        return total
+        return (total, containsGit)
     }
 }
 

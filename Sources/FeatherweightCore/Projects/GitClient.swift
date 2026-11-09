@@ -38,12 +38,17 @@ public struct GitClient: Sendable {
         let args = ["rev-parse", "--show-toplevel"]
         let result = try exec(args, in: directory)
         if !result.succeeded {
-            if result.exitCode == 128 && result.stderr.contains("not a git repository") { return nil }
+            // The full "(or any of the parent directories)" message only: a dangling `.git` file
+            // says just "not a git repository: <path>", and that is an error, not "no repo".
+            if result.exitCode == 128
+                && result.stderr.contains("not a git repository (or any of the parent directories)") {
+                return nil
+            }
             throw Self.failure(args, result)
         }
         // Trim only line endings: a path may legitimately end in a space.
         let text = result.stdout.trimmingCharacters(in: .newlines)
-        guard !text.isEmpty else { return nil }
+        guard !text.isEmpty else { throw Self.failure(args, result) }  // success with no path: fail closed
         // Git prints the physical path (`/private/var/...`); canonicalise it the same way project
         // roots are, so the two compare equal.
         return URL(fileURLWithPath: text, isDirectory: true).resolvingSymlinksInPath()
@@ -132,8 +137,12 @@ public struct GitClient: Sendable {
         return !components.isEmpty && !components.contains { $0 == "." || $0 == ".." }
     }
 
+    /// Physical path; for a path that does not exist, the physical parent plus the last component.
     private static func physicalPath(_ path: String) -> String {
-        PhysicalPath.resolve(path) ?? path
+        if let resolved = PhysicalPath.resolve(path) { return resolved }
+        let url = URL(fileURLWithPath: path)
+        guard let parent = PhysicalPath.resolve(url.deletingLastPathComponent().path) else { return path }
+        return (parent.hasSuffix("/") ? parent : parent + "/") + url.lastPathComponent
     }
 
     /// `path` relative to `root`, or nil if it lies outside it. The root itself is ".".

@@ -154,13 +154,15 @@ import Testing
     }
 
     @Test func everyGitCallRunsWithLocaleForcedToC() throws {
+        let tree = try TempTree()
+        defer { tree.remove() }
         let seen = CallLog()
         let runner = FakeRunner { command, args in
             seen.append(([command] + args).joined(separator: " "))
-            return CommandResult(exitCode: 0, stdout: "/tmp\n", stderr: "")
+            return CommandResult(exitCode: 0, stdout: tree.root.path + "\n", stderr: "")
         }
         let client = GitClient(runner: runner)
-        let dir = URL(fileURLWithPath: "/tmp")
+        let dir = tree.root
         _ = try client.findRepoRoot(for: dir)
         _ = try client.checkTracked(dir.appendingPathComponent("x"), repoRoot: dir)
         _ = client.currentBranch(dir)
@@ -186,6 +188,28 @@ import Testing
         ])
         let client = GitClient(runner: runner)
         #expect(try client.findRepoRoot(for: tree.root) == nil)
+    }
+
+    @Test func successfulRevParseWithNoOutputFailsClosed() throws {
+        let tree = try TempTree()
+        defer { tree.remove() }
+        let empty = FakeRunner { _, _ in CommandResult(exitCode: 0, stdout: "\n", stderr: "") }
+        #expect(throws: GitError.self) { try GitClient(runner: empty).findRepoRoot(for: tree.root) }
+    }
+
+    @Test func danglingGitFileThrowsInsteadOfReportingNoRepository() throws {
+        let tree = try TempTree([".git": "gitdir: /nonexistent/moved/repo\n", "a.txt": "1"])
+        defer { tree.remove() }
+        #expect(throws: GitError.self) { try GitClient(runner: GitFixture.runner).findRepoRoot(for: tree.root) }
+    }
+
+    @Test func notARepositoryMessageWithoutParentDirectoriesSuffixIsAnError() throws {
+        let tree = try TempTree()
+        defer { tree.remove() }
+        let runner = FakeRunner { _, _ in
+            CommandResult(exitCode: 128, stdout: "", stderr: "fatal: not a git repository: (null)")
+        }
+        #expect(throws: GitError.self) { try GitClient(runner: runner).findRepoRoot(for: tree.root) }
     }
 
     @Test func checkTrackedThrowsOnGitFailure() throws {
