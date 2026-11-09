@@ -135,8 +135,6 @@ background priority with throttled disk access, and the whole download is about 
 
 ## First launch
 
-<!-- TODO: verify wording after first real install. The message text and the Open Anyway steps below are written from current macOS wording and have not yet been checked on a fresh download. -->
-
 Featherweight isn't notarized by Apple, because that takes a paid Apple Developer account
 and this is a free project. So the first time you open it, macOS 15 and later says:
 
