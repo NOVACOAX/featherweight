@@ -46,4 +46,14 @@ import Testing
         #expect(
             status(.npm, [kept, candidate(".next", skip: .trackedInGit)]) == "Tracked in git")
     }
+
+    @Test func skipReasonText() {
+        #expect(SkipReason.recentlyActive.displayText(activityWindowHours: 24) == "Active in the last 24 hours")
+        #expect(SkipReason.recentlyActive.displayText(activityWindowHours: 1) == "Active in the last hour")
+        #expect(SkipReason.trackedInGit.displayText(activityWindowHours: 24) == "Tracked in git")
+        #expect(SkipReason.notEnabled.displayText(activityWindowHours: 24) == "Turned off in Settings")
+        #expect(SkipReason.gitUnavailable.displayText(activityWindowHours: 24) == "Git unavailable")
+        #expect(SkipReason.pathChanged.displayText(activityWindowHours: 24) == "Changed during cleanup")
+        #expect(SkipReason.containsRepository.displayText(activityWindowHours: 24) == "Contains a git repository")
+    }
 }

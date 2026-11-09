@@ -53,7 +53,7 @@ private struct RunnerFixture {
         #expect(history.first?.kind == .dedupe)
         #expect(history.first?.trigger == .manualCLI)
         #expect((history.first?.bytesFreed ?? 0) > 0)
-        #expect(history.first?.summary == "Shared duplicates in 1 projects")
+        #expect(history.first?.summary == "Shared duplicates in 1 project")
         #expect((history.first?.lastFSEventID ?? 0) > 0)
 
         let stats = try f.readJSON(SavingsSnapshot.self, f.paths.stats)
@@ -116,7 +116,7 @@ private struct RunnerFixture {
         #expect(saved.summary == "Cleared caches in 2 projects, 1 skipped")
         #expect(saved.projects == [f.projectURL("a").path, f.projectURL("b").path])
         #expect(saved.skipped.count == 1)
-        #expect(saved.skipped[0].hasSuffix("/.output: notEnabled"))
+        #expect(saved.skipped == ["b/.output: Turned off in Settings"])
         let summaries = try f.readJSON([ProjectSummary].self, f.paths.projects)
         #expect(summaries.first { $0.name == "a" }?.status.hasPrefix("Cleared") == true)
         #expect(summaries.first { $0.name == "b" }?.status.hasPrefix("Cleared") == true)
@@ -181,7 +181,7 @@ private struct RunnerFixture {
         defer { f.tree.remove() }
         let other = JobLock(url: f.paths.jobLock)
 
-        let insideBody = f.runner.withLock(onWaiting: nil) { other.tryLock() }
+        let insideBody = try f.runner.withLock(onWaiting: nil) { other.tryLock() }
 
         #expect(!insideBody)
         #expect(other.tryLock())  // released after the body
@@ -196,5 +196,68 @@ private struct RunnerFixture {
 
         #expect(snapshot.sharedBytes == 0)
         #expect(try f.readJSON(SavingsSnapshot.self, f.paths.stats) == snapshot)
+    }
+
+    @Test func cleanSummaryUsesSingularForOneProject() throws {
+        let f = try RunnerFixture(extraFiles: ["projects/a/.next/cache.bin": "x"])
+        try f.tree.setAllMTimes(to: Date().addingTimeInterval(-30 * 86_400))
+        defer { f.tree.remove() }
+
+        let (_, record) = f.runner.clean(trigger: .manualCLI, dryRun: false)
+
+        #expect(record?.summary == "Cleared caches in 1 project, 0 skipped")
+    }
+
+    @Test func skippedEntriesAreHumanReadableAndUseConfiguredWindow() throws {
+        let f = try RunnerFixture(extraFiles: ["projects/a/.next/cache.bin": "x"])
+        defer { f.tree.remove() }
+        try f.tree.setMTime("projects/a/package.json", to: Date())  // project a is active
+        var settings = SettingsStore(paths: f.paths).load()
+        settings.activityWindowHours = 6
+        try SettingsStore(paths: f.paths).save(settings)
+
+        let (_, record) = f.runner.clean(trigger: .manualCLI, dryRun: false)
+
+        #expect(record?.skipped == ["a/.next: Active in the last 6 hours"])
+    }
+
+    @Test func unavailableLockMeansTheJobDoesNotRun() throws {
+        let f = try RunnerFixture(extraFiles: ["projects/a/.next/cache.bin": "x"])
+        try f.tree.setAllMTimes(to: Date().addingTimeInterval(-30 * 86_400))
+        defer { f.tree.remove() }
+        try FileManager.default.createDirectory(at: f.paths.jobLock, withIntermediateDirectories: true)
+        let waited = Locked(false)
+        let ran = Locked(false)
+
+        #expect(throws: (any Error).self) {
+            try f.runner.withLock(onWaiting: { waited.value = true }) { ran.value = true }
+        }
+        let (dedupe, dedupeRecord) = f.runner.dedupe(trigger: .manualCLI, dryRun: false)
+        let (clean, cleanRecord) = f.runner.clean(trigger: .manualCLI, dryRun: false)
+
+        #expect(!ran.value && !waited.value)
+        #expect(dedupeRecord == nil && cleanRecord == nil)
+        #expect(dedupe.bytesFreed == 0 && dedupe.filesReplaced == 0)
+        #expect(clean.cleared.isEmpty && clean.bytesFreed == 0)
+        #expect(dedupe.errors.count == 1 && clean.errors.count == 1)
+        #expect(FileManager.default.fileExists(atPath: f.tree.url("projects/a/.next/cache.bin").path))
+        #expect(!FileManager.default.fileExists(atPath: f.paths.history.path))
+        let info = try CloneFS.info(at: f.tree.url("projects/b/node_modules/react/index.js"))
+        #expect(!info.sharesAllBlocks)
+    }
+
+    @Test func derivedStateWriteFailuresAreReported() throws {
+        let f = try RunnerFixture()
+        defer { f.tree.remove() }
+        try FileManager.default.createDirectory(at: f.paths.stats, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: f.paths.projects, withIntermediateDirectories: true)
+
+        let (report, record) = f.runner.dedupe(trigger: .manualCLI, dryRun: false)
+
+        #expect(record != nil)  // the job itself ran and was recorded
+        #expect(report.bytesFreed > 0)
+        #expect(report.errors.contains { $0.hasPrefix("stats.json:") })
+        #expect(report.errors.contains { $0.hasPrefix("projects.json:") })
+        #expect(HistoryStore(url: f.paths.history).all().count == 1)
     }
 }

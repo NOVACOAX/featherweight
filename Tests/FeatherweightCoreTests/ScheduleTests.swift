@@ -53,4 +53,51 @@ import Testing
         #expect(daily.isOverdue(
             lastRun: date(2026, 11, 8, 3, 1), now: date(2026, 11, 9, 3, 0), calendar: calendar))
     }
+
+    @Test func notOverdueOneSecondBeforeTheScheduledTime() {
+        let before = date(2026, 11, 9, 3).addingTimeInterval(-0.5)
+        #expect(!daily.isOverdue(lastRun: date(2026, 11, 8, 3, 1), now: before, calendar: calendar))
+        #expect(daily.isOverdue(
+            lastRun: date(2026, 11, 8, 3, 1), now: date(2026, 11, 9, 3), calendar: calendar))
+    }
+
+    @Test func overdueFallsBackToThePreviousOccurrenceJustBeforeTheNext() {
+        // 02:59:59.5 on Nov 9: the Nov 9 03:00 slot has not arrived, but Nov 8 03:00 was missed.
+        let now = date(2026, 11, 9, 3).addingTimeInterval(-0.5)
+        #expect(daily.isOverdue(lastRun: date(2026, 11, 7, 3), now: now, calendar: calendar))
+    }
+
+    // MARK: DST (America/New_York)
+
+    private let newYork: Calendar = {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "America/New_York")!
+        return calendar
+    }()
+
+    private func nyDate(_ y: Int, _ m: Int, _ d: Int, _ h: Int, _ min: Int = 0) -> Date {
+        newYork.date(from: DateComponents(year: y, month: m, day: d, hour: h, minute: min))!
+    }
+
+    @Test func springForwardRunsAtThreeEDTWhenTwoThirtyDoesNotExist() {
+        let schedule = Schedule(frequency: .daily, weekday: 1, hour: 2, minute: 30)
+        let next = schedule.nextRun(after: nyDate(2026, 3, 7, 12), calendar: newYork)  // 2026-03-08 skips 02:00-03:00
+        #expect(next == nyDate(2026, 3, 8, 3))
+        #expect(newYork.dateComponents([.hour, .minute], from: next) == DateComponents(hour: 3, minute: 0))
+        // The day after is a normal 02:30.
+        #expect(schedule.nextRun(after: next, calendar: newYork) == nyDate(2026, 3, 9, 2, 30))
+    }
+
+    @Test func fallBackRunsOnceWhenOneThirtyHappensTwice() {
+        let schedule = Schedule(frequency: .daily, weekday: 1, hour: 1, minute: 30)
+        // 2026-11-01 01:30 occurs as EDT and then again as EST.
+        let first = schedule.nextRun(after: nyDate(2026, 11, 1, 0), calendar: newYork)
+        let second = schedule.nextRun(after: first, calendar: newYork)
+
+        #expect(first == nyDate(2026, 11, 1, 1, 30))
+        #expect(second == nyDate(2026, 11, 2, 1, 30))
+        // After the first run the repeated 01:30 is not overdue.
+        let afterRepeat = first.addingTimeInterval(3_600 + 60)
+        #expect(!schedule.isOverdue(lastRun: first.addingTimeInterval(30), now: afterRepeat, calendar: newYork))
+    }
 }

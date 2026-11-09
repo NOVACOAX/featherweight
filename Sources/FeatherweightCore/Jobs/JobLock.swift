@@ -17,32 +17,47 @@ public final class JobLock: @unchecked Sendable {
         if fd >= 0 { close(fd) }  // closing the descriptor also drops the lock
     }
 
-    /// Takes the lock if it is free. Returns false when another holder has it, or the lock file
-    /// cannot be opened.
-    public func tryLock() -> Bool {
-        guard let fd = descriptor() else { return false }
-        return flock(fd, LOCK_EX | LOCK_NB) == 0
+    /// Takes the lock if it is free. Returns false when another holder has it. Throws when the
+    /// lock file cannot be opened or locked, so callers never mistake that for "free".
+    public func tryAcquire() throws -> Bool {
+        let fd = try descriptor()
+        while true {
+            if flock(fd, LOCK_EX | LOCK_NB) == 0 { return true }
+            switch errno {
+            case EWOULDBLOCK: return false
+            case EINTR: continue
+            default: throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+            }
+        }
     }
 
-    /// Blocks until the lock is acquired.
-    public func lock() {
-        guard let fd = descriptor() else { return }
-        while flock(fd, LOCK_EX) != 0 && errno == EINTR {}
+    /// Like `tryAcquire`, but false for any failure (the lock was not taken).
+    public func tryLock() -> Bool {
+        (try? tryAcquire()) ?? false
+    }
+
+    /// Blocks until the lock is held. Throws if the lock file cannot be opened or locked.
+    public func lock() throws {
+        let fd = try descriptor()
+        while flock(fd, LOCK_EX) != 0 {
+            if errno != EINTR { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+        }
     }
 
     public func unlock() {
-        guard let fd = descriptor() else { return }
-        flock(fd, LOCK_UN)
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        if fd >= 0 { flock(fd, LOCK_UN) }
     }
 
-    private func descriptor() -> Int32? {
+    private func descriptor() throws -> Int32 {
         stateLock.lock()
         defer { stateLock.unlock() }
         if fd >= 0 { return fd }
-        try? FileManager.default.createDirectory(
+        try FileManager.default.createDirectory(
             at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         let opened = open(url.path, O_RDWR | O_CREAT | O_CLOEXEC, 0o644)
-        guard opened >= 0 else { return nil }
+        guard opened >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
         fd = opened
         return opened
     }

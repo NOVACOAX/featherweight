@@ -28,17 +28,21 @@ public final class JobRunner: @unchecked Sendable {
         if dryRun {
             return (runDedupe(only: only, dryRun: true).report, nil)
         }
-        return withLock(onWaiting: onWaiting) {
-            let startedAt = Date()
-            var (report, context) = runDedupe(only: only, dryRun: false)
-            let record = RunRecord(
-                id: UUID(), kind: .dedupe, trigger: trigger, startedAt: startedAt,
-                finishedAt: Date(), bytesFreed: report.bytesFreed,
-                summary: "Shared duplicates in \(report.perProject.count) projects",
-                projects: report.perProject.keys.sorted(), skipped: [], errors: report.errors,
-                lastFSEventID: FSEventsGetCurrentEventId())
-            if let failure = finish(record, context) { report.errors.append(failure) }
-            return (report, record)
+        do {
+            return try withLock(onWaiting: onWaiting) {
+                let startedAt = Date()
+                var (report, context) = runDedupe(only: only, dryRun: false)
+                let record = RunRecord(
+                    id: UUID(), kind: .dedupe, trigger: trigger, startedAt: startedAt,
+                    finishedAt: Date(), bytesFreed: report.bytesFreed,
+                    summary: "Shared duplicates in \(Self.projects(report.perProject.count))",
+                    projects: report.perProject.keys.sorted(), skipped: [], errors: report.errors,
+                    lastFSEventID: FSEventsGetCurrentEventId())
+                report.errors += finish(record, context)
+                return (report, record)
+            }
+        } catch {
+            return (DedupeReport(errors: [Self.lockFailure(error)]), nil)
         }
     }
 
@@ -49,31 +53,39 @@ public final class JobRunner: @unchecked Sendable {
         if dryRun {
             return (runClean(only: only, dryRun: true).report, nil)
         }
-        return withLock(onWaiting: onWaiting) {
-            let startedAt = Date()
-            var (report, context) = runClean(only: only, dryRun: false)
-            let cleared = Set(report.cleared.map(\.projectRoot))
-            let record = RunRecord(
-                id: UUID(), kind: .clean, trigger: trigger, startedAt: startedAt,
-                finishedAt: Date(), bytesFreed: report.bytesFreed,
-                summary: "Cleared caches in \(cleared.count) projects, \(report.skipped.count) skipped",
-                projects: cleared.sorted(),
-                skipped: report.skipped.map { "\($0.folder): \($0.skip?.rawValue ?? "skipped")" },
-                errors: report.errors, lastFSEventID: FSEventsGetCurrentEventId())
-            var clearedBytes: [String: Int64] = [:]
-            for candidate in report.cleared { clearedBytes[candidate.projectRoot, default: 0] += candidate.allocatedBytes }
-            if let failure = finish(record, context, clearedBytes: clearedBytes) { report.errors.append(failure) }
-            return (report, record)
+        do {
+            return try withLock(onWaiting: onWaiting) {
+                let startedAt = Date()
+                var (report, context) = runClean(only: only, dryRun: false)
+                let cleared = Set(report.cleared.map(\.projectRoot))
+                let hours = context.settings.activityWindowHours
+                let record = RunRecord(
+                    id: UUID(), kind: .clean, trigger: trigger, startedAt: startedAt,
+                    finishedAt: Date(), bytesFreed: report.bytesFreed,
+                    summary: "Cleared caches in \(Self.projects(cleared.count)), \(report.skipped.count) skipped",
+                    projects: cleared.sorted(),
+                    skipped: report.skipped.map { Self.skippedText($0, activityWindowHours: hours) },
+                    errors: report.errors, lastFSEventID: FSEventsGetCurrentEventId())
+                var clearedBytes: [String: Int64] = [:]
+                for candidate in report.cleared {
+                    clearedBytes[candidate.projectRoot, default: 0] += candidate.allocatedBytes
+                }
+                report.errors += finish(record, context, clearedBytes: clearedBytes)
+                return (report, record)
+            }
+        } catch {
+            return (CleanReport(errors: [Self.lockFailure(error)]), nil)
         }
     }
 
     /// Holds the job lock while `body` runs, calling `onWaiting` first if another process holds it.
-    public func withLock<T>(onWaiting: (() -> Void)?, _ body: () throws -> T) rethrows -> T {
-        try? paths.ensureExists()
+    /// Throws, without running `body`, if the lock cannot be taken at all.
+    public func withLock<T>(onWaiting: (() -> Void)?, _ body: () throws -> T) throws -> T {
+        try paths.ensureExists()
         let lock = JobLock(url: paths.jobLock)
-        if !lock.tryLock() {
+        if try !lock.tryAcquire() {
             onWaiting?()
-            lock.lock()
+            try lock.lock()
         }
         defer { lock.unlock() }
         return try body()
@@ -81,18 +93,20 @@ public final class JobRunner: @unchecked Sendable {
 
     // MARK: Refreshing derived state
 
-    /// Re-measures shared bytes and writes `stats.json`.
+    /// Re-measures shared bytes and writes `stats.json` (a failed write is not reported here).
     @discardableResult
     public func refreshSavings() -> SavingsSnapshot {
         let context = loadContext()
         return writeSavings(context.allProjects)
     }
 
-    /// Rebuilds and writes `projects.json`.
+    /// Rebuilds and writes `projects.json` (a failed write is not reported here).
     @discardableResult
     public func refreshSummaries() -> [ProjectSummary] {
         let context = loadContext()
-        return writeSummaries(context, savings: readSavings() ?? SavingsSnapshot(measuredAt: Date()), clearedBytes: [:])
+        return writeSummaries(
+            context, savings: readSavings() ?? SavingsSnapshot(measuredAt: Date()), clearedBytes: [:]
+        ).summaries
     }
 
     // MARK: Internals
@@ -143,23 +157,26 @@ public final class JobRunner: @unchecked Sendable {
         return (report, context)
     }
 
-    /// Appends the record, then refreshes savings and summaries. Returns a message if the
-    /// history file could not be written.
-    private func finish(_ record: RunRecord, _ context: Context, clearedBytes: [String: Int64] = [:]) -> String? {
-        var failure: String?
+    /// Appends the record, then refreshes savings and summaries. Returns a message for each
+    /// file that could not be written.
+    private func finish(
+        _ record: RunRecord, _ context: Context, clearedBytes: [String: Int64] = [:]
+    ) -> [String] {
+        var failures: [String] = []
         do {
             try history.append(record)
         } catch {
-            failure = "history: \(error.localizedDescription)"
+            failures.append("history: \(error.localizedDescription)")
         }
-        let savings = writeSavings(context.allProjects)
-        writeSummaries(context, savings: savings, clearedBytes: clearedBytes)
-        return failure
+        let savings = SavingsMeter().measure(projects: context.allProjects, now: Date())
+        failures += write(savings, to: paths.stats)
+        failures += writeSummaries(context, savings: savings, clearedBytes: clearedBytes).errors
+        return failures
     }
 
     private func writeSavings(_ projects: [Project]) -> SavingsSnapshot {
         let snapshot = SavingsMeter().measure(projects: projects, now: Date())
-        write(snapshot, to: paths.stats)
+        _ = write(snapshot, to: paths.stats)
         return snapshot
     }
 
@@ -168,10 +185,9 @@ public final class JobRunner: @unchecked Sendable {
         return try? JSONDecoder().decode(SavingsSnapshot.self, from: data)
     }
 
-    @discardableResult
     private func writeSummaries(
         _ context: Context, savings: SavingsSnapshot, clearedBytes: [String: Int64]
-    ) -> [ProjectSummary] {
+    ) -> (summaries: [ProjectSummary], errors: [String]) {
         let projects = context.allProjects
         let plan = CacheCleaner(git: GitClient(runner: runner), activity: ActivityChecker())
             .plan(projects: projects, settings: context.settings)
@@ -201,8 +217,7 @@ public final class JobRunner: @unchecked Sendable {
                 upstream: repo.flatMap(git.upstream),
                 remoteURL: repo.flatMap { git.remoteURL($0, remote: "origin") })
         }
-        write(summaries, to: paths.projects)
-        return summaries
+        return (summaries, write(summaries, to: paths.projects))
     }
 
     /// Logical `node_modules` size and newest source change for each project, by index.
@@ -215,11 +230,34 @@ public final class JobRunner: @unchecked Sendable {
         return (logical, projects.map { activity.lastSourceChange(root: $0.root) })
     }
 
-    private func write<T: Encodable>(_ value: T, to url: URL) {
+    /// Writes `value` as JSON; returns a message if that failed.
+    private func write<T: Encodable>(_ value: T, to url: URL) -> [String] {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        guard let data = try? encoder.encode(value) else { return }
-        try? paths.ensureExists()
-        try? data.write(to: url, options: .atomic)
+        do {
+            let data = try encoder.encode(value)
+            try paths.ensureExists()
+            try data.write(to: url, options: .atomic)
+            return []
+        } catch {
+            return ["\(url.lastPathComponent): \(error.localizedDescription)"]
+        }
+    }
+
+    // MARK: Text
+
+    private static func projects(_ count: Int) -> String {
+        count == 1 ? "1 project" : "\(count) projects"
+    }
+
+    private static func lockFailure(_ error: Error) -> String {
+        "Could not take the job lock, nothing was run: \(error.localizedDescription)"
+    }
+
+    /// "linkbreeze/.next: Active in the last 24 hours"
+    private static func skippedText(_ candidate: CacheCandidate, activityWindowHours: Int) -> String {
+        let project = URL(fileURLWithPath: candidate.projectRoot).lastPathComponent
+        let reason = candidate.skip?.displayText(activityWindowHours: activityWindowHours) ?? "Skipped"
+        return "\(project)/\(candidate.relativePath): \(reason)"
     }
 }

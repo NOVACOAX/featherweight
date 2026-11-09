@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 public enum JobKind: String, Codable, Sendable {
@@ -50,22 +51,33 @@ public final class HistoryStore: Sendable {
         self.url = url
     }
 
-    /// Appends one JSON line, creating the file and its folder if needed. The line is written in
-    /// a single `write`, so concurrent appends from separate processes do not interleave.
+    /// Appends one JSON line, creating the file and its folder if needed.
+    ///
+    /// The file is opened `O_APPEND` and the line goes out in a single `write(2)`, so concurrent
+    /// appends from several processes land whole, one after another. If a crash left the last
+    /// line unterminated, the new record starts on a fresh line so it stays readable.
     public func append(_ record: RunRecord) throws {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
         var line = try encoder.encode(record)
         line.append(UInt8(ascii: "\n"))
-        let fm = FileManager.default
-        try fm.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        if !fm.fileExists(atPath: url.path) {
-            fm.createFile(atPath: url.path, contents: nil)
-        }
-        let handle = try FileHandle(forWritingTo: url)
-        defer { try? handle.close() }
-        try handle.seekToEnd()
-        try handle.write(contentsOf: line)
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let fd = open(url.path, O_RDWR | O_APPEND | O_CREAT | O_CLOEXEC, 0o644)
+        guard fd >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+        defer { close(fd) }
+        if Self.endsWithPartialLine(fd) { line.insert(UInt8(ascii: "\n"), at: 0) }
+        let written = line.withUnsafeBytes { write(fd, $0.baseAddress, $0.count) }
+        guard written == line.count else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+    }
+
+    /// True when the file is non-empty and its last byte is not a newline.
+    private static func endsWithPartialLine(_ fd: Int32) -> Bool {
+        var info = stat()
+        guard fstat(fd, &info) == 0, info.st_size > 0 else { return false }
+        var last: UInt8 = 0
+        guard pread(fd, &last, 1, info.st_size - 1) == 1 else { return false }
+        return last != UInt8(ascii: "\n")
     }
 
     /// Every readable record, newest first. Corrupt lines are skipped.

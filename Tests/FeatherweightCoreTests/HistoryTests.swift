@@ -77,4 +77,48 @@ import Testing
 
         #expect(history.cachesClearedThisMonth(now: date(2026, 11, 9), calendar: calendar) == 150)
     }
+
+    @Test func unterminatedLastLineDoesNotSwallowNextRecord() throws {
+        let tree = try TempTree()
+        defer { tree.remove() }
+        let history = store(tree)
+        let first = record(.dedupe, bytes: 1, finished: date(2026, 11, 1))
+        let second = record(.clean, bytes: 2, finished: date(2026, 11, 2))
+        try history.append(first)
+        // Simulate a crash mid-write: a partial record with no trailing newline.
+        let handle = try FileHandle(forWritingTo: tree.url("state/history.jsonl"))
+        try handle.seekToEnd()
+        try handle.write(contentsOf: Data("{\"id\":\"partial".utf8))
+        try handle.close()
+        try history.append(second)
+
+        #expect(history.all() == [second, first])
+    }
+
+    @Test func appendsFromSeparateStoresAllLand() throws {
+        let tree = try TempTree()
+        defer { tree.remove() }
+        let url = tree.url("state/history.jsonl")
+        let records = (0..<200).map { record(.clean, bytes: Int64($0), finished: date(2026, 11, 1)) }
+
+        DispatchQueue.concurrentPerform(iterations: records.count) { i in
+            // A fresh store per append, as separate processes would have.
+            try? HistoryStore(url: url).append(records[i])
+        }
+
+        let stored = HistoryStore(url: url).all()
+        #expect(stored.count == records.count)
+        #expect(Set(stored.map(\.id)) == Set(records.map(\.id)))
+    }
+
+    @Test func appendNeverTruncatesAnExistingFile() throws {
+        let tree = try TempTree()
+        defer { tree.remove() }
+        let history = store(tree)
+        for i in 0..<3 { try history.append(record(.clean, bytes: Int64(i), finished: date(2026, 11, 1))) }
+        try HistoryStore(url: tree.url("state/history.jsonl"))
+            .append(record(.dedupe, bytes: 9, finished: date(2026, 11, 2)))
+
+        #expect(history.all().count == 4)
+    }
 }
