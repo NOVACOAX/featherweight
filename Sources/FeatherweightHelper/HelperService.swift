@@ -198,7 +198,7 @@ final class HelperService {
             rescanProjects()
         }
         readHistory(notify: true)
-        if old.paused, !settings.paused {
+        if !old.automaticWorkAllowed, settings.automaticWorkAllowed {
             runOverdueJobs()
         }
         reschedule()
@@ -250,12 +250,15 @@ final class HelperService {
     // MARK: Jobs
 
     private func runOverdueJobs(now: Date = Date()) {
-        guard !settings.paused else { return }
+        guard settings.automaticWorkAllowed else { return }
         let records = history.all()
         let scheduled: [(JobKind, Schedule)] = [(.dedupe, settings.dedupeSchedule), (.clean, settings.cleanSchedule)]
         for (kind, schedule) in scheduled where !queuedScheduled.contains(kind) {
             // After-install runs cover a single project, so they do not count as the sweep.
-            let lastRun = records.first { $0.kind == kind && $0.trigger != .afterInstall }?.finishedAt
+            // No sweep recorded yet means first launch's own runs (started by "Start saving
+            // space") are still going: wait for the schedule instead of sweeping twice.
+            guard let lastRun = records.first(where: { $0.kind == kind && $0.trigger != .afterInstall })?.finishedAt
+            else { continue }
             if schedule.isOverdue(lastRun: lastRun, now: now, calendar: .current) {
                 queuedScheduled.insert(kind)
                 enqueue(kind, trigger: .scheduled, only: nil, projectName: nil, frequency: schedule.frequency)
@@ -274,9 +277,9 @@ final class HelperService {
         jobQueue.async { [weak self] in
             let errors: [String]
             let record: RunRecord?
-            if SettingsStore(paths: paths).load().paused {
-                // Paused after this job was queued: skip it, but still report back so the
-                // in-flight bookkeeping unwinds.
+            if !SettingsStore(paths: paths).load().automaticWorkAllowed {
+                // Paused (or first launch not finished) after this job was queued: skip it, but
+                // still report back so the in-flight bookkeeping unwinds.
                 (errors, record) = (["paused"], nil)
             } else if kind == .clean {
                 let result = jobs.clean(trigger: trigger, only: roots, dryRun: false)
@@ -325,7 +328,7 @@ final class HelperService {
 
     private func timerFired() {
         let now = Date()
-        if !settings.paused {
+        if settings.automaticWorkAllowed {
             let roots = debouncer.due(now: now)
             if !roots.isEmpty {
                 let name = roots.map(\.lastPathComponent).joined(separator: ", ")
@@ -345,7 +348,7 @@ final class HelperService {
         guard let timer else { return }
         let now = Date()
         var candidates: [Date] = []
-        if !settings.paused {
+        if settings.automaticWorkAllowed {
             candidates.append(settings.dedupeSchedule.nextRun(after: now, calendar: .current))
             candidates.append(settings.cleanSchedule.nextRun(after: now, calendar: .current))
             if let due = debouncer.nextDue { candidates.append(due) }

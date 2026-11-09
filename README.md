@@ -328,12 +328,13 @@ To publish a release:
 
 1. Change the number in the `VERSION` file (`X.Y.Z`). The app's displayed version and the
    release tag `vX.Y.Z` both come from it.
-2. Commit it and push to `main`.
+2. Add a `## [X.Y.Z] - YYYY-MM-DD` section to [CHANGELOG.md](CHANGELOG.md) describing the changes.
+3. Commit both and push to `main`.
 
 When the pushed `VERSION` differs from the latest GitHub release, the hook builds the app,
 signs it, zips it with `ditto`, and, once the commit has landed on GitHub, creates the tag
-and the release with the zip attached and notes generated from the commits since the last
-release. If the build fails, the push is stopped with a message, so a version bump never
+and the release with the zip attached. The release notes are that version's CHANGELOG
+section, or notes generated from the commits if the section is missing. If the build fails, the push is stopped with a message, so a version bump never
 reaches `main` without its release. If the version didn't change, the push goes through
 untouched.
 

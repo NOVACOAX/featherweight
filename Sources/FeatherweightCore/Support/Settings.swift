@@ -42,6 +42,10 @@ public struct Settings: Codable, Equatable, Sendable {
     public var paused: Bool
     public var onboardingComplete: Bool
 
+    /// Whether the helper may do anything on its own (after installs or on a schedule): never
+    /// before the user finished first launch with "Start saving space", and never while paused.
+    public var automaticWorkAllowed: Bool { onboardingComplete && !paused }
+
     public init(
         projectFolders: [String],
         cacheFolders: [CacheFolderSetting],

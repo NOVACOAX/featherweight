@@ -15,7 +15,8 @@ struct FirstLaunchEstimate: Equatable, Sendable {
     static let computeCount = OSAllocatedUnfairLock(initialState: 0)
     #endif
 
-    /// Blocks while it scans and hashes, so run it off the main actor. Reads the saved settings.
+    /// Blocks while it walks the projects, so run it off the main actor. Reads the saved settings.
+    /// Duplicates are estimated without reading file contents (see `DuplicateEstimate`).
     static func compute(paths: AppPaths) -> FirstLaunchEstimate {
         #if DEBUG
         computeCount.withLock { $0 += 1 }
@@ -23,10 +24,9 @@ struct FirstLaunchEstimate: Equatable, Sendable {
         let settings = SettingsStore(paths: paths).load()
         let projects = ProjectScanner(excludedDirectoryNames: ProjectScanner.excludedNames(for: settings), home: paths.home)
             .scan(folders: settings.projectFolders.map { URL(fileURLWithPath: $0, isDirectory: true) })
-        let jobs = JobRunner(paths: paths)
-        let (dedupe, _) = jobs.dedupe(trigger: .firstLaunch, dryRun: true)
-        let (clean, _) = jobs.clean(trigger: .firstLaunch, dryRun: true)
+        let duplicates = DuplicateEstimate.bytes(projects: projects)
+        let (clean, _) = JobRunner(paths: paths).clean(trigger: .firstLaunch, dryRun: true)
         return FirstLaunchEstimate(
-            projects: projects.count, duplicateBytes: dedupe.bytesFreed, cacheBytes: clean.bytesFreed)
+            projects: projects.count, duplicateBytes: duplicates, cacheBytes: clean.bytesFreed)
     }
 }

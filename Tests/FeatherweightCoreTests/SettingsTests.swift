@@ -91,4 +91,14 @@ struct SettingsTests {
         #expect(FileManager.default.fileExists(atPath: paths.backups.path, isDirectory: &isDirectory))
         #expect(isDirectory.boolValue)
     }
+
+    @Test func automaticWorkWaitsForFirstLaunchAndPause() {
+        var settings = Settings.defaults(home: FileManager.default.temporaryDirectory)
+        #expect(!settings.onboardingComplete)
+        #expect(!settings.automaticWorkAllowed)
+        settings.onboardingComplete = true
+        #expect(settings.automaticWorkAllowed)
+        settings.paused = true
+        #expect(!settings.automaticWorkAllowed)
+    }
 }

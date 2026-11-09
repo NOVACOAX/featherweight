@@ -304,7 +304,8 @@ final class AppModel {
                     continue
                 }
                 let paths = paths
-                let found = await Task.detached(priority: .background) {
+                // The user is waiting on this screen, so it runs ahead of background work.
+                let found = await Task.detached(priority: .utility) {
                     FirstLaunchEstimate.compute(paths: paths)
                 }.value
                 if !estimateAgain { firstLaunchEstimate = .ready(found) }

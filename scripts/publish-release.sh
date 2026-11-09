@@ -75,12 +75,27 @@ if gh release view "v$VERSION" --repo "$REPO" >/dev/null 2>&1 </dev/null; then
     exit 0
 fi
 
+# Release notes: this version's section of CHANGELOG.md at the pushed commit, or notes
+# generated from the commits when there is no such section.
+NOTES_ARGS=(--generate-notes)
+NOTES_FILE="$(mktemp -t featherweight-notes)"
+if git show "$SHA:CHANGELOG.md" 2>/dev/null \
+        | awk -v v="$VERSION" '
+            index($0, "## [" v "]") == 1 { found = 1; next }
+            found && /^## \[/ { exit }
+            found { print }' > "$NOTES_FILE" \
+        && grep -q '[^[:space:]]' "$NOTES_FILE"; then
+    NOTES_ARGS=(--notes-file "$NOTES_FILE")
+    log "using the CHANGELOG.md section for v$VERSION as release notes"
+fi
+
 log "main has $SHA; creating release v$VERSION"
 if ! gh release create "v$VERSION" "$ZIP" --repo "$REPO" --target "$SHA" \
-        --title "Featherweight $VERSION" --generate-notes </dev/null; then
+        --title "Featherweight $VERSION" "${NOTES_ARGS[@]}" </dev/null; then
     fail "gh release create failed"
 fi
 
+rm -f "$NOTES_FILE"
 log "published v$VERSION"
 notify "Featherweight $VERSION is published."
 FINISHED=1
