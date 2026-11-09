@@ -1,0 +1,67 @@
+#!/bin/bash
+# Pre-push hook: when a push lands a new VERSION on main, build the release zip now (a failed
+# build stops the push) and start a detached publisher that creates the GitHub release once
+# main has actually arrived on the remote.
+# git feeds one line per ref on stdin: <local ref> <local sha> <remote ref> <remote sha>
+set -euo pipefail
+
+REPO="NOVACOAX/featherweight"
+ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+cd "$ROOT"
+
+# Read every line first so nothing we run below can consume the ref list.
+refs=()
+while read -r local_ref local_sha remote_ref remote_sha || [[ -n "${local_ref:-}" ]]; do
+    refs+=("$local_ref $local_sha $remote_ref $remote_sha")
+    local_ref=""
+done
+
+release_for() {
+    local sha="$1" new latest
+    if ! new="$(git show "$sha:VERSION" 2>/dev/null | tr -d '[:space:]')" || [[ -z "$new" ]]; then
+        echo "pre-push: cannot read VERSION at ${sha:0:8}; push stopped." >&2
+        return 1
+    fi
+    if [[ ! "$new" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        echo "pre-push: VERSION \"$new\" at ${sha:0:8} is not X.Y.Z; push stopped." >&2
+        return 1
+    fi
+
+    latest="$(gh release view --repo "$REPO" --json tagName -q .tagName 2>/dev/null </dev/null | sed 's/^v//')" || latest=""
+    if [[ "$new" == "$latest" ]]; then
+        return 0
+    fi
+
+    # The build uses the working tree, so it must be exactly the commit being pushed.
+    if [[ "$(git rev-parse HEAD)" != "$sha" || -n "$(git status --porcelain --untracked-files=no)" ]]; then
+        echo "pre-push: v$new needs a release build, but the working tree is not a clean checkout of ${sha:0:8}." >&2
+        echo "          Check out and clean that commit, then push again." >&2
+        return 1
+    fi
+
+    echo "pre-push: building v$new (latest release: ${latest:-none})"
+    if ! scripts/build-app.sh --version "$new" </dev/null; then
+        echo "Release build failed: push stopped so v$new never reaches main without its release." >&2
+        return 1
+    fi
+
+    mkdir -p build/release
+    local zip="build/release/Featherweight-$new.zip"
+    rm -f "$zip"
+    if ! ditto -c -k --keepParent build/Featherweight.app "$zip"; then
+        echo "Release build failed: push stopped so v$new never reaches main without its release." >&2
+        return 1
+    fi
+
+    nohup scripts/publish-release.sh "$new" "$sha" >> build/release/publish.log 2>&1 </dev/null &
+    disown 2>/dev/null || true
+    echo "pre-push: v$new built; release will be published after the push lands (log: build/release/publish.log)"
+}
+
+for entry in ${refs[@]+"${refs[@]}"}; do
+    read -r _ local_sha remote_ref _ <<<"$entry"
+    [[ "$remote_ref" == "refs/heads/main" ]] || continue
+    [[ "$local_sha" =~ ^0+$ ]] && continue   # deleting main: nothing to release
+    release_for "$local_sha" || exit 1
+done
+exit 0

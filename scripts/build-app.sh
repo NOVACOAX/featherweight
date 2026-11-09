@@ -66,7 +66,9 @@ cp "$CONTENTS/Resources/AppIcon.icns" "$HELPER_CONTENTS/Resources/AppIcon.icns"
 rm -rf "$(dirname "$ICONSET")"
 
 echo "==> Signing"
-if security find-identity -v -p codesigning | grep -q "Featherweight Self-Signed"; then
+# Capture first: grep -q exiting early can SIGPIPE security under pipefail and force the ad-hoc branch.
+IDENTITIES="$(security find-identity -v -p codesigning || true)"
+if grep -q "Featherweight Self-Signed" <<<"$IDENTITIES"; then
     IDENTITY="Featherweight Self-Signed"
 else
     IDENTITY="-"
