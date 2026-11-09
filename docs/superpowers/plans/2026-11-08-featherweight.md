@@ -963,6 +963,11 @@ taking screenshots. There are no UI test targets.
   3. Adding `~/Library/Mobile Documents/…` is refused with the alert text.
 - [ ] **Step 5:** Commit with `git commit -m "feat: settings, onboarding, folder policy, CLI install, updates"`.
 
+> **Deferred (2026-11-09, Hugh's decision):** pnpm conversion (Tasks 13–15) is
+> skipped for v1. Its in-progress work is parked on the `pnpm-conversion` branch
+> to continue later. For v1, Task 11's "Convert to pnpm…" button is removed and
+> the README doesn't document conversion.
+
 ### Task 13: pnpm conversion engine
 
 **Files:**
