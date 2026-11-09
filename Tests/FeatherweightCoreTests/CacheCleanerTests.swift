@@ -573,6 +573,168 @@ extension CacheCleanerTests {
     }
 }
 
+extension CacheCleanerTests {
+    /// A fake git that answers `rev-parse --show-toplevel` with `topLevel(directory)` (nil means
+    /// "not a repository") and `ls-files` with nothing (untracked).
+    private func fakeGit(_ topLevel: @escaping @Sendable (String) -> String?) -> GitClient {
+        GitClient(runner: DirectoryFakeRunner { args, directory in
+            if args.contains("rev-parse") {
+                guard let top = topLevel(PhysicalPath.resolve(directory.path) ?? directory.path) else {
+                    return CommandResult(
+                        exitCode: 128, stdout: "",
+                        stderr: "fatal: not a git repository (or any of the parent directories): .git\n")
+                }
+                return CommandResult(exitCode: 0, stdout: top + "\n", stderr: "")
+            }
+            return CommandResult(exitCode: 0, stdout: "", stderr: "")
+        })
+    }
+
+    private func runInactive(_ tree: TempTree, project root: URL, git: GitClient) -> CleanReport {
+        try? tree.setAllMTimes(to: Date(timeIntervalSinceNow: -30 * 24 * 3600))
+        return CacheCleaner(git: git, activity: ActivityChecker())
+            .run(projects: [Project(root: root, parentRoot: nil, packageManager: .npm, nodeModules: nil)],
+                 settings: Settings.defaults(home: tree.root), dryRun: false)
+    }
+
+    @Test func repositoryChainDeeperThanTheCapFailsClosed() throws {
+        let deep = Array(repeating: "d", count: 70).joined(separator: "/")
+        let tree = try TempTree(["\(deep)/src/index.ts": "x", "\(deep)/.next/a": "y"])
+        defer { tree.remove() }
+        let base = try #require(PhysicalPath.resolve(tree.root.path))
+        // Every directory below the temp root is the top of its own repository, so the walk
+        // upwards meets more than 64 enclosing repositories.
+        let git = fakeGit { dir in dir.hasPrefix(base + "/") ? dir : nil }
+
+        let report = runInactive(tree, project: tree.url(deep), git: git)
+
+        #expect(FileManager.default.fileExists(atPath: tree.url("\(deep)/.next/a").path))
+        #expect(report.cleared.isEmpty)
+        #expect(report.skipped.first?.skip == .gitUnavailable)
+        #expect(report.errors.count == 1)
+    }
+
+    @Test func shortRepositoryChainUnderTheFakeIsStillCleaned() throws {
+        // Control for the test above: the same fake with a shallow project clears the folder.
+        let tree = try TempTree(["d/d/src/index.ts": "x", "d/d/.next/a": "y"])
+        defer { tree.remove() }
+        let base = try #require(PhysicalPath.resolve(tree.root.path))
+        let git = fakeGit { dir in dir.hasPrefix(base + "/") ? dir : nil }
+
+        let report = runInactive(tree, project: tree.url("d/d"), git: git)
+
+        #expect(!FileManager.default.fileExists(atPath: tree.url("d/d/.next").path))
+        #expect(report.errors.isEmpty)
+    }
+
+    @Test func enclosingRepositoryThatIsNotAnAncestorFailsClosed() throws {
+        let tree = try TempTree(["proj/src/index.ts": "x", "proj/.next/a": "y", "elsewhere/b": "z"])
+        defer { tree.remove() }
+        let base = try #require(PhysicalPath.resolve(tree.root.path))
+        // The project's repository is found normally; the next one up (say, core.worktree
+        // pointing sideways) claims a work tree that does not contain the project.
+        let git = fakeGit { dir in
+            if dir.hasPrefix(base + "/proj") { return base + "/proj" }
+            if dir == base { return base + "/elsewhere" }
+            return nil
+        }
+
+        let report = runInactive(tree, project: tree.url("proj"), git: git)
+
+        #expect(FileManager.default.fileExists(atPath: tree.url("proj/.next/a").path))
+        #expect(report.cleared.isEmpty)
+        #expect(report.skipped.first?.skip == .gitUnavailable)
+        #expect(report.errors.count == 1)
+    }
+
+    @Test func enclosingRepositoryThatIsNotStrictlyAboveThePreviousOneFailsClosed() throws {
+        let tree = try TempTree(["proj/src/index.ts": "x", "proj/.next/a": "y"])
+        defer { tree.remove() }
+        let base = try #require(PhysicalPath.resolve(tree.root.path))
+        // Asked about the directory above the project's repository, git names a work tree below
+        // it (still around the folder, so ls-files there would not fail on its own).
+        let git = fakeGit { dir in
+            if dir == base + "/proj/.next" { return base + "/proj" }
+            if dir == base { return base + "/proj/.next" }
+            return nil
+        }
+
+        let report = runInactive(tree, project: tree.url("proj"), git: git)
+
+        #expect(FileManager.default.fileExists(atPath: tree.url("proj/.next/a").path))
+        #expect(report.cleared.isEmpty)
+        #expect(report.skipped.first?.skip == .gitUnavailable)
+        #expect(report.errors.count == 1)
+    }
+
+    @Test func innermostRepositoryThatDoesNotContainTheFolderFailsClosed() throws {
+        let tree = try TempTree(["proj/src/index.ts": "x", "proj/.next/a": "y", "elsewhere/b": "z"])
+        defer { tree.remove() }
+        let base = try #require(PhysicalPath.resolve(tree.root.path))
+        let git = fakeGit { dir in dir.hasPrefix(base + "/proj") ? base + "/elsewhere" : nil }
+
+        let report = runInactive(tree, project: tree.url("proj"), git: git)
+
+        #expect(FileManager.default.fileExists(atPath: tree.url("proj/.next/a").path))
+        #expect(report.skipped.first?.skip == .gitUnavailable)
+        #expect(!report.errors.isEmpty)
+    }
+}
+
+extension CacheCleanerTests {
+    /// End to end: repository G tracks `ext/proj/.next/keep.txt`, where `ext` is a separate volume
+    /// (a disk image) mounted inside G's work tree. Git discovery from the project stops at the
+    /// mount point by default, so the cleaner must ask for discovery across file systems.
+    @Test func folderTrackedByARepositoryAcrossAMountPointIsNeverRemoved() throws {
+        let tree = try TempTree(["G/README": "r", "G/ext/.placeholder": ""])
+        defer { tree.remove() }
+        let image = tree.url("ext.dmg").path
+        let mountPoint = tree.url("G/ext").path
+        try FileManager.default.removeItem(atPath: tree.url("G/ext/.placeholder").path)
+        try hdiutil(["create", "-quiet", "-size", "4m", "-fs", "HFS+", "-volname", "fwtest", image])
+        try hdiutil(["attach", "-quiet", "-nobrowse", "-mountpoint", mountPoint, image])
+        defer { _ = try? hdiutil(["detach", "-quiet", "-force", mountPoint]) }
+        try FileManager.default.createDirectory(
+            atPath: mountPoint + "/proj/.next", withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(
+            atPath: mountPoint + "/proj/src", withIntermediateDirectories: true)
+        try "k".write(toFile: mountPoint + "/proj/.next/keep.txt", atomically: false, encoding: .utf8)
+        try "x".write(toFile: mountPoint + "/proj/src/index.ts", atomically: false, encoding: .utf8)
+        try GitFixture.git(["init", "-q", "-b", "main"], in: tree.url("G"))
+        try GitFixture.git(["add", "README", "ext/proj/.next/keep.txt"], in: tree.url("G"))
+        try GitFixture.git(["commit", "-q", "-m", "g"], in: tree.url("G"))
+
+        let report = runDefault(tree, project: tree.url("G/ext/proj"))
+
+        #expect(FileManager.default.fileExists(atPath: mountPoint + "/proj/.next/keep.txt"))
+        #expect(report.cleared.isEmpty)
+        #expect(report.skipped.first { $0.relativePath == ".next" }?.skip == .trackedInGit)
+    }
+
+    @discardableResult
+    private func hdiutil(_ args: [String]) throws -> CommandResult {
+        let result = try ProcessCommandRunner(environment: ["PATH": "/usr/bin:/bin"])
+            .run("/usr/bin/hdiutil", args, in: nil)
+        guard result.succeeded else {
+            throw GitFixtureError.failed("hdiutil " + args.joined(separator: " "), result.stderr)
+        }
+        return result
+    }
+}
+
+/// Like `FakeRunner`, but also sees the directory the command runs in.
+struct DirectoryFakeRunner: CommandRunner {
+    let handler: @Sendable ([String], URL) throws -> CommandResult
+
+    init(_ handler: @escaping @Sendable ([String], URL) throws -> CommandResult) {
+        self.handler = handler
+    }
+
+    func run(_ command: String, _ args: [String], in directory: URL?) throws -> CommandResult {
+        try handler(args, directory ?? URL(fileURLWithPath: "/"))
+    }
+}
+
 /// Runs a closure instead of a real command.
 struct FakeRunner: CommandRunner {
     let handler: @Sendable (String, [String]) throws -> CommandResult

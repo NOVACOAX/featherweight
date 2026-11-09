@@ -234,18 +234,55 @@ public struct CacheCleaner: Sendable {
         return .skip(state.active! ? .recentlyActive : nil)
     }
 
-    /// Roots of all repositories containing `folder`, innermost first.
+    /// More enclosing repositories than this is treated as a loop, not a real layout.
+    private static let maxEnclosingRepositories = 64
+
+    /// Why the walk over enclosing repositories could not be trusted.
+    private enum RepositoryWalkError: Error, CustomStringConvertible {
+        case tooManyRepositories(Int)
+        case notAnAncestor(root: String, of: String)
+
+        var description: String {
+            switch self {
+            case .tooManyRepositories(let limit):
+                "more than \(limit) enclosing repositories"
+            case .notAnAncestor(let root, let path):
+                "repository root \(root) does not enclose \(path)"
+            }
+        }
+    }
+
+    /// Roots of all repositories containing `folder`, innermost first. Throws rather than return a
+    /// partial list: the innermost root must contain the folder, each further root must lie
+    /// strictly above the previous one (so a `core.worktree` pointing sideways, or git naming the
+    /// same root again, is an error), and the chain may not exceed `maxEnclosingRepositories`.
     private func enclosingRepositories(of folder: URL) throws -> [URL] {
         var roots: [URL] = []
+        var below = folder
         var next = try git.findRepoRoot(for: folder)
         while let root = next {
+            guard Self.encloses(root, below, allowSame: roots.isEmpty) else {
+                throw RepositoryWalkError.notAnAncestor(root: root.path, of: below.path)
+            }
+            guard roots.count < Self.maxEnclosingRepositories else {
+                throw RepositoryWalkError.tooManyRepositories(Self.maxEnclosingRepositories)
+            }
             roots.append(root)
             let parent = root.deletingLastPathComponent()
-            // Stop at the file-system root; the depth cap is a backstop against a loop.
-            if parent.path == root.path || roots.count > 64 { break }
+            if parent.path == root.path { break }  // the file-system root
+            below = root
             next = try git.findRepoRoot(for: parent)
         }
         return roots
+    }
+
+    /// Whether `ancestor` is a directory above `path` (or, with `allowSame`, `path` itself),
+    /// comparing physical paths. A path that cannot be resolved encloses nothing.
+    private static func encloses(_ ancestor: URL, _ path: URL, allowSame: Bool) -> Bool {
+        guard let top = PhysicalPath.resolve(ancestor.path), let full = PhysicalPath.resolve(path.path)
+        else { return false }
+        if top == full { return allowSame }
+        return full.hasPrefix(top.hasSuffix("/") ? top : top + "/")
     }
 
     /// A real directory (not a symlink) whose physical path is exactly the project's physical root

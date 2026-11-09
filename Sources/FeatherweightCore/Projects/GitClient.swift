@@ -6,8 +6,9 @@ public enum GitError: Error, Equatable {
     case invalidPathspec(String)
 }
 
-/// Thin wrapper over `/usr/bin/git` (run as `env LC_ALL=C git ...`). Every call passes paths as separate arguments (never through
-/// a shell) and puts `--` before pathspecs. Pathspecs are literal, so names containing glob
+/// Thin wrapper over `/usr/bin/git` (run through `/usr/bin/env` with a cleaned environment and
+/// `LC_ALL=C`). Every call passes paths as separate arguments (never through a shell) and puts
+/// `--` before pathspecs. Pathspecs are literal, so names containing glob
 /// characters or spaces mean exactly what they say.
 public struct GitClient: Sendable {
     private static let git = "/usr/bin/git"
@@ -34,9 +35,11 @@ public struct GitClient: Sendable {
 
     /// Like `repoRoot(for:)`, but returns nil only when `directory` is genuinely not inside a git
     /// repository. Any other failure (git missing, "dubious ownership", a locked index) throws.
+    /// Discovery crosses file-system boundaries, so a repository above a volume mounted inside its
+    /// work tree is still found.
     public func findRepoRoot(for directory: URL) throws -> URL? {
         let args = ["rev-parse", "--show-toplevel"]
-        let result = try exec(args, in: directory)
+        let result = try exec(args, in: directory, extraEnvironment: ["GIT_DISCOVERY_ACROSS_FILESYSTEM=1"])
         if !result.succeeded {
             if result.exitCode == 128 && Self.isNotARepositoryMessage(result.stderr) { return nil }
             throw Self.failure(args, result)
@@ -95,14 +98,22 @@ public struct GitClient: Sendable {
 
     // MARK: - Helpers
 
+    /// Inherited variables that would stop discovery early (`GIT_CEILING_DIRECTORIES`) or point
+    /// git at a different repository, work tree or index than the one around the directory.
+    private static let clearedVariables = [
+        "GIT_CEILING_DIRECTORIES", "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR",
+    ]
+
     /// Runs git through `/usr/bin/env` so each call gets its own environment (the runner's is
-    /// fixed when it is created). `LC_ALL=C` keeps git's messages in English, which the
-    /// "not a git repository" check depends on, whatever the user's locale.
+    /// fixed when it is created). The variables in `clearedVariables` are removed. `LC_ALL=C`
+    /// keeps git's messages in English, which the "not a git repository" check depends on,
+    /// whatever the user's locale.
     private func exec(
         _ args: [String], in directory: URL, extraEnvironment: [String] = []
     ) throws -> CommandResult {
-        try runner.run(
-            Self.env, ["LC_ALL=C"] + extraEnvironment + [Self.git] + args, in: directory)
+        let unset = Self.clearedVariables.flatMap { ["-u", $0] }
+        return try runner.run(
+            Self.env, unset + ["LC_ALL=C"] + extraEnvironment + [Self.git] + args, in: directory)
     }
 
     /// Trimmed-of-newline stdout of a successful, non-empty command; nil otherwise.
@@ -121,8 +132,9 @@ public struct GitClient: Sendable {
     }
 
     /// git's exact "no repository here" messages: the usual one, and the one used when discovery
-    /// stops at a mount point (a project on an external drive). Matching only these keeps other
-    /// failures, such as a dangling `.git` file ("not a git repository: <path>"), as errors.
+    /// stops at a mount point. Discovery is run across file systems, so the second should not
+    /// appear; it is kept only as a backstop. Matching only these keeps other failures, such as a
+    /// dangling `.git` file ("not a git repository: <path>"), as errors.
     private static func isNotARepositoryMessage(_ stderr: String) -> Bool {
         stderr.contains("not a git repository (or any of the parent directories)")
             || (stderr.contains("not a git repository (or any parent up to mount point ")

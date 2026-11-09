@@ -134,7 +134,7 @@ import Testing
             return CommandResult(exitCode: 0, stdout: "", stderr: "")
         }
         _ = try GitClient(runner: runner).push(repoRoot: URL(fileURLWithPath: "/tmp"))
-        #expect(seen.all == ["/usr/bin/env LC_ALL=C GIT_TERMINAL_PROMPT=0 /usr/bin/git push"])
+        #expect(seen.all == [GitClientTests.envPrefix + "LC_ALL=C GIT_TERMINAL_PROMPT=0 /usr/bin/git push"])
     }
 
     @Test func findRepoRootDistinguishesNotARepoFromGitErrors() throws {
@@ -153,7 +153,12 @@ import Testing
         #expect(GitClient(runner: broken).repoRoot(for: URL(fileURLWithPath: "/tmp")) == nil)
     }
 
-    @Test func everyGitCallRunsWithLocaleForcedToC() throws {
+    /// Every git call starts with this: inherited variables that would cut discovery short or point
+    /// git at another repository or index are removed.
+    static let envPrefix =
+        "/usr/bin/env -u GIT_CEILING_DIRECTORIES -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_COMMON_DIR "
+
+    @Test func everyGitCallRunsWithACleanEnvironmentAndLocaleForcedToC() throws {
         let tree = try TempTree()
         defer { tree.remove() }
         let seen = CallLog()
@@ -172,8 +177,44 @@ import Testing
         _ = try client.push(repoRoot: dir)
         #expect(seen.all.count >= 8)
         for call in seen.all {
-            #expect(call.hasPrefix("/usr/bin/env LC_ALL=C /usr/bin/git ") || call.hasPrefix("/usr/bin/env LC_ALL=C GIT_TERMINAL_PROMPT=0 /usr/bin/git "), "\(call)")
+            #expect(call.hasPrefix(Self.envPrefix + "LC_ALL=C "), "\(call)")
+            #expect(call.contains(" /usr/bin/git "), "\(call)")
         }
+    }
+
+    @Test func findRepoRootDiscoversAcrossFileSystemBoundaries() throws {
+        let tree = try TempTree()
+        defer { tree.remove() }
+        let seen = CallLog()
+        let runner = FakeRunner { command, args in
+            seen.append(([command] + args).joined(separator: " "))
+            return CommandResult(exitCode: 0, stdout: tree.root.path + "\n", stderr: "")
+        }
+        _ = try GitClient(runner: runner).findRepoRoot(for: tree.root)
+        #expect(seen.all == [
+            Self.envPrefix + "LC_ALL=C GIT_DISCOVERY_ACROSS_FILESYSTEM=1 /usr/bin/git rev-parse --show-toplevel"
+        ])
+    }
+
+    @Test func inheritedGitVariablesDoNotCutDiscoveryShortOrRedirectIt() throws {
+        let tree = try TempTree(["repo/sub/.next/keep.txt": "k", "other/a.txt": "a"])
+        defer { tree.remove() }
+        let repo = tree.url("repo")
+        try GitFixture.initRepo(repo)  // commits sub/.next/keep.txt
+        try GitFixture.initRepo(tree.url("other"))  // an unrelated repository that tracks nothing here
+        let runner = ProcessCommandRunner(environment: [
+            "PATH": "/usr/bin:/bin", "HOME": NSTemporaryDirectory(),
+            "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_CEILING_DIRECTORIES": repo.path,
+            "GIT_DIR": tree.url("other/.git").path,
+            "GIT_WORK_TREE": tree.url("other").path,
+            "GIT_INDEX_FILE": tree.url("other/.git/index").path,
+            "GIT_COMMON_DIR": tree.url("other/.git").path,
+        ])
+        let client = GitClient(runner: runner)
+        let root = try #require(try client.findRepoRoot(for: tree.url("repo/sub")))
+        #expect(PhysicalPath.resolve(root.path) == PhysicalPath.resolve(repo.path))
+        #expect(try client.checkTracked(tree.url("repo/sub/.next"), repoRoot: root))
     }
 
     @Test func notARepositoryIsDetectedUnderNonEnglishParentLocale() throws {
@@ -184,7 +225,6 @@ import Testing
             "PATH": "/usr/bin:/bin", "HOME": NSTemporaryDirectory(),
             "LANG": "de_DE.UTF-8", "LC_ALL": "de_DE.UTF-8", "LANGUAGE": "de",
             "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1",
-            "GIT_CEILING_DIRECTORIES": tree.root.deletingLastPathComponent().path,
         ])
         let client = GitClient(runner: runner)
         #expect(try client.findRepoRoot(for: tree.root) == nil)
