@@ -210,4 +210,213 @@ import Testing
         #expect(!exists(root.appendingPathComponent(".next")))
         #expect(report.skipped.first { $0.relativePath == ".cache" }?.skip == .trackedInGit)
     }
+
+    // MARK: - Safety
+
+    @Test(arguments: ["", ".", "..", "../sibling", "a/../..", "./", "/etc", ".git", "node_modules", "a//b", "x/.git/y"])
+    func unsafeRelativePathsAreRejected(path: String) {
+        #expect(!CacheFolderSetting.isSafeRelativePath(path))
+    }
+
+    @Test(arguments: [".next", "node_modules/.cache", "storybook-static", "a/b/c", ".gitignore-cache"])
+    func safeRelativePathsAreAccepted(path: String) {
+        #expect(CacheFolderSetting.isSafeRelativePath(path))
+    }
+
+    @Test(arguments: ["", ".", "../sibling", "a/../..", ".git", "node_modules"])
+    func unsafeConfiguredPathsNeverDeleteAnything(path: String) throws {
+        let tree = try TempTree([
+            "proj/src/index.ts": "x", "proj/node_modules/pkg/index.js": "z", "sibling/keep.txt": "k",
+            "proj/.next/a": "y",
+        ])
+        defer { tree.remove() }
+        try GitFixture.git(["init", "-q", "-b", "main"], in: tree.url("proj"))
+        try tree.setAllMTimes(to: oldDate)
+        let bad = CacheFolderSetting(relativePath: path, enabled: true, isBuiltIn: false)
+        var s = settings([bad])
+        s.cacheFolders = [bad]  // only the unsafe entry
+
+        let projectRoot = tree.url("proj")
+        let report = cleaner().run(projects: [project(projectRoot)], settings: s, dryRun: false)
+
+        #expect(report.cleared.isEmpty)
+        #expect(report.bytesFreed == 0)
+        #expect(!report.errors.isEmpty)
+        #expect(exists(tree.url("sibling/keep.txt")))
+        #expect(exists(tree.url("proj/src/index.ts")))
+        #expect(exists(tree.url("proj/node_modules/pkg/index.js")))
+        #expect(exists(tree.url("proj/.git")))
+        #expect(exists(tree.url("proj/.next/a")))
+        #expect(cleaner().plan(projects: [project(projectRoot)], settings: s).isEmpty)
+    }
+
+    @Test func symlinkedNodeModulesCannotEscapeTheProject() throws {
+        let tree = try TempTree([
+            "proj/src/index.ts": "x", "outside/.cache/secret": "s", "outside/.vite/v": "v",
+        ])
+        defer { tree.remove() }
+        try FileManager.default.createSymbolicLink(
+            at: tree.url("proj/node_modules"), withDestinationURL: tree.url("outside"))
+        try tree.setAllMTimes(to: oldDate)
+
+        let projectRoot = tree.url("proj")
+        let report = cleaner().run(projects: [project(projectRoot)], settings: settings(), dryRun: false)
+
+        #expect(exists(tree.url("outside/.cache/secret")))
+        #expect(exists(tree.url("outside/.vite/v")))
+        #expect(report.cleared.isEmpty)
+        #expect(cleaner().plan(projects: [project(projectRoot)], settings: settings()).isEmpty)
+    }
+
+    @Test func symlinkedIntermediateDirectoryInsideTheProjectIsAlsoSkipped() throws {
+        let tree = try TempTree(["proj/src/index.ts": "x", "proj/real/dist-cache/a": "y"])
+        defer { tree.remove() }
+        try FileManager.default.createSymbolicLink(
+            at: tree.url("proj/link"), withDestinationURL: tree.url("proj/real"))
+        try tree.setAllMTimes(to: oldDate)
+        let custom = CacheFolderSetting(relativePath: "link/dist-cache", enabled: true, isBuiltIn: false)
+        var s = settings()
+        s.cacheFolders = [custom]
+
+        let report = cleaner().run(projects: [project(tree.url("proj"))], settings: s, dryRun: false)
+
+        #expect(exists(tree.url("proj/real/dist-cache/a")))
+        #expect(report.cleared.isEmpty)
+    }
+
+    @Test func symlinkedCacheFolderIsLeftAlone() throws {
+        let tree = try TempTree(["proj/src/index.ts": "x", "outside/a": "o"])
+        defer { tree.remove() }
+        try FileManager.default.createSymbolicLink(
+            at: tree.url("proj/.next"), withDestinationURL: tree.url("outside"))
+        try tree.setAllMTimes(to: oldDate)
+
+        let report = cleaner().run(projects: [project(tree.url("proj"))], settings: settings(), dryRun: false)
+        #expect(exists(tree.url("outside/a")))
+        #expect(report.cleared.isEmpty)
+    }
+
+    @Test func gitFailureSkipsTheFolderAndReportsTheError() throws {
+        let tree = try TempTree(["src/index.ts": "x", ".next/a": "y"])
+        defer { tree.remove() }
+        try tree.setAllMTimes(to: oldDate)
+        let failing = FakeRunner { _, _ in
+            CommandResult(exitCode: 1, stdout: "", stderr: "fatal: detected dubious ownership")
+        }
+        let cleaner = CacheCleaner(git: GitClient(runner: failing), activity: ActivityChecker())
+
+        let report = cleaner.run(projects: [project(tree.root)], settings: settings(), dryRun: false)
+
+        #expect(exists(tree.url(".next/a")))
+        #expect(report.cleared.isEmpty)
+        #expect(report.skipped.first?.skip == .gitUnavailable)
+        #expect(report.errors.count == 1)
+        #expect(report.errors.first?.contains("dubious ownership") == true)
+    }
+
+    @Test func gitExitCode128WithAnotherMessageIsAnErrorToo() throws {
+        let tree = try TempTree(["src/index.ts": "x", ".next/a": "y"])
+        defer { tree.remove() }
+        try tree.setAllMTimes(to: oldDate)
+        let failing = FakeRunner { _, _ in
+            CommandResult(exitCode: 128, stdout: "", stderr: "fatal: unable to read index.lock")
+        }
+        let cleaner = CacheCleaner(git: GitClient(runner: failing), activity: ActivityChecker())
+        let report = cleaner.run(projects: [project(tree.root)], settings: settings(), dryRun: false)
+        #expect(exists(tree.url(".next/a")))
+        #expect(!report.errors.isEmpty)
+    }
+
+    @Test func missingGitBinarySkipsTheFolder() throws {
+        let tree = try TempTree(["src/index.ts": "x", ".next/a": "y"])
+        defer { tree.remove() }
+        try tree.setAllMTimes(to: oldDate)
+        let missing = FakeRunner { _, _ in throw CommandRunnerError.commandNotFound("/usr/bin/git") }
+        let cleaner = CacheCleaner(git: GitClient(runner: missing), activity: ActivityChecker())
+        let report = cleaner.run(projects: [project(tree.root)], settings: settings(), dryRun: false)
+        #expect(exists(tree.url(".next/a")))
+        #expect(!report.errors.isEmpty)
+    }
+
+    @Test func notARepositoryIsNotAnError() throws {
+        let tree = try TempTree(["src/index.ts": "x", ".next/a": "y"])
+        defer { tree.remove() }
+        try tree.setAllMTimes(to: oldDate)
+        let notRepo = FakeRunner { _, _ in
+            CommandResult(exitCode: 128, stdout: "", stderr: "fatal: not a git repository (or any of the parent directories): .git")
+        }
+        let cleaner = CacheCleaner(git: GitClient(runner: notRepo), activity: ActivityChecker())
+        let report = cleaner.run(projects: [project(tree.root)], settings: settings(), dryRun: false)
+        #expect(!exists(tree.url(".next")))
+        #expect(report.errors.isEmpty)
+    }
+
+    @Test func projectThatBecomesActiveAfterPlanningIsNotCleaned() throws {
+        let tree = try TempTree(["src/index.ts": "x", ".next/a": "y"])
+        defer { tree.remove() }
+        try tree.setAllMTimes(to: oldDate)
+        let root = tree.root
+        let cleaner = CacheCleaner(
+            git: GitClient(runner: GitFixture.runner), activity: ActivityChecker(),
+            beforeRemoval: { _ in
+                try? Data("edit".utf8).write(to: root.appendingPathComponent("src/index.ts"))
+            })
+
+        let report = cleaner.run(projects: [project(root)], settings: settings(), dryRun: false)
+
+        #expect(exists(tree.url(".next/a")))
+        #expect(report.cleared.isEmpty)
+        #expect(report.skipped.first?.skip == .recentlyActive)
+    }
+
+    @Test func folderThatBecomesTrackedAfterPlanningIsNotCleaned() throws {
+        let tree = try TempTree(["src/index.ts": "x", ".next/a": "y"])
+        defer { tree.remove() }
+        try GitFixture.initRepo(tree.root)  // .next committed too; untrack it, then re-add after planning
+        try GitFixture.git(["rm", "-r", "-q", "--cached", ".next"], in: tree.root)
+        try GitFixture.git(["commit", "-q", "-m", "untrack"], in: tree.root)
+        try tree.setAllMTimes(to: oldDate)
+        let root = tree.root
+        let cleaner = CacheCleaner(
+            git: GitClient(runner: GitFixture.runner), activity: ActivityChecker(),
+            beforeRemoval: { _ in _ = try? GitFixture.git(["add", "-f", ".next/a"], in: root) })
+
+        let report = cleaner.run(projects: [project(root)], settings: settings(), dryRun: false)
+
+        #expect(exists(tree.url(".next/a")))
+        #expect(report.skipped.first?.skip == .trackedInGit)
+    }
+
+    @Test func folderReplacedBySymlinkAfterPlanningIsNotFollowed() throws {
+        let tree = try TempTree(["proj/src/index.ts": "x", "proj/.next/a": "y", "outside/keep": "k"])
+        defer { tree.remove() }
+        try tree.setAllMTimes(to: oldDate)
+        let next = tree.url("proj/.next")
+        let outside = tree.url("outside")
+        let cleaner = CacheCleaner(
+            git: GitClient(runner: GitFixture.runner), activity: ActivityChecker(),
+            beforeRemoval: { _ in
+                try? FileManager.default.removeItem(at: next)
+                try? FileManager.default.createSymbolicLink(at: next, withDestinationURL: outside)
+            })
+
+        let report = cleaner.run(projects: [project(tree.url("proj"))], settings: settings(), dryRun: false)
+
+        #expect(exists(tree.url("outside/keep")))
+        #expect(report.cleared.isEmpty)
+        #expect(report.skipped.first?.skip == .pathChanged)
+    }
+}
+
+/// Runs a closure instead of a real command.
+struct FakeRunner: CommandRunner {
+    let handler: @Sendable (String, [String]) throws -> CommandResult
+
+    init(_ handler: @escaping @Sendable (String, [String]) throws -> CommandResult) {
+        self.handler = handler
+    }
+
+    func run(_ command: String, _ args: [String], in directory: URL?) throws -> CommandResult {
+        try handler(command, args)
+    }
 }

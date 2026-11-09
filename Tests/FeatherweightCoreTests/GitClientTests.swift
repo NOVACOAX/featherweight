@@ -108,4 +108,64 @@ import Testing
         let result = try client.push(repoRoot: tree.root)
         #expect(result.succeeded)
     }
+
+    @Test(arguments: ["", ".", "..", "../x", "a/../b", "/etc/passwd", "a/.", "./"])
+    func commitRejectsPathspecsThatCouldStageMoreThanOneFile(path: String) throws {
+        let tree = try TempTree(["a.txt": "1", "b.txt": "1"])
+        defer { tree.remove() }
+        try GitFixture.initRepo(tree.root)
+        try tree.add(["a.txt": "2", "b.txt": "2"])
+
+        #expect(throws: GitError.invalidPathspec(path)) {
+            try client.commit(files: ["a.txt", path], message: "nope", repoRoot: tree.root)
+        }
+
+        // Rejected before anything ran: no commit, nothing staged.
+        let count = try GitFixture.git(["rev-list", "--count", "HEAD"], in: tree.root)
+        #expect(count.trimmingCharacters(in: .newlines) == "1")
+        let staged = try GitFixture.git(["diff", "--cached", "--name-only"], in: tree.root)
+        #expect(staged.isEmpty)
+    }
+
+    @Test func pushDisablesCredentialPrompts() throws {
+        let seen = CallLog()
+        let runner = FakeRunner { command, args in
+            seen.append(([command] + args).joined(separator: " "))
+            return CommandResult(exitCode: 0, stdout: "", stderr: "")
+        }
+        _ = try GitClient(runner: runner).push(repoRoot: URL(fileURLWithPath: "/tmp"))
+        #expect(seen.all == ["/usr/bin/env GIT_TERMINAL_PROMPT=0 /usr/bin/git push"])
+    }
+
+    @Test func findRepoRootDistinguishesNotARepoFromGitErrors() throws {
+        let notRepo = FakeRunner { _, _ in
+            CommandResult(exitCode: 128, stdout: "", stderr: "fatal: not a git repository (or any of the parent directories): .git\n")
+        }
+        #expect(try GitClient(runner: notRepo).findRepoRoot(for: URL(fileURLWithPath: "/tmp")) == nil)
+
+        let broken = FakeRunner { _, _ in
+            CommandResult(exitCode: 128, stdout: "", stderr: "fatal: detected dubious ownership in repository")
+        }
+        #expect(throws: GitError.self) {
+            try GitClient(runner: broken).findRepoRoot(for: URL(fileURLWithPath: "/tmp"))
+        }
+        // The best-effort wrapper still answers nil.
+        #expect(GitClient(runner: broken).repoRoot(for: URL(fileURLWithPath: "/tmp")) == nil)
+    }
+
+    @Test func checkTrackedThrowsOnGitFailure() throws {
+        let tree = try TempTree(["a.txt": "1"])
+        defer { tree.remove() }
+        let broken = FakeRunner { _, _ in CommandResult(exitCode: 128, stdout: "", stderr: "fatal: boom") }
+        #expect(throws: GitError.self) {
+            try GitClient(runner: broken).checkTracked(tree.url("a.txt"), repoRoot: tree.root)
+        }
+    }
+}
+
+final class CallLog: @unchecked Sendable {
+    private let lock = NSLock()
+    private var items: [String] = []
+    func append(_ item: String) { lock.lock(); items.append(item); lock.unlock() }
+    var all: [String] { lock.lock(); defer { lock.unlock() }; return items }
 }

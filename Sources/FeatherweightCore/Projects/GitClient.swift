@@ -2,6 +2,8 @@ import Foundation
 
 public enum GitError: Error, Equatable {
     case commandFailed(command: String, exitCode: Int32, stderr: String)
+    /// A path handed to `commit` that could stage more than the one file it names.
+    case invalidPathspec(String)
 }
 
 /// Thin wrapper over `/usr/bin/git`. Every call passes paths as separate arguments (never through
@@ -17,20 +19,45 @@ public struct GitClient: Sendable {
     }
 
     /// Top-level directory of the work tree containing `directory`, or nil outside a repository.
+    /// Best effort: any git failure also reads as nil. Code that deletes things must use
+    /// `findRepoRoot(for:)`, which tells "not a repository" apart from a git error.
     public func repoRoot(for directory: URL) -> URL? {
-        guard let output = output(["rev-parse", "--show-toplevel"], in: directory) else { return nil }
-        // Git prints the physical path (`/private/var/...`); canonicalise it the same way project
-        // roots are, so the two compare equal.
-        return URL(fileURLWithPath: output, isDirectory: true).resolvingSymlinksInPath()
+        try? findRepoRoot(for: directory)
     }
 
-    /// True when git tracks `path` itself or, for a directory, anything beneath it.
+    /// True when git tracks `path` itself or, for a directory, anything beneath it. Best effort:
+    /// any git failure reads as false. Deleting code must use `checkTracked(_:repoRoot:)`.
     public func isTracked(_ path: URL, repoRoot: URL) -> Bool {
-        guard let relative = Self.relativePath(of: path, in: repoRoot) else { return false }
-        guard let result = try? runner.run(
-            Self.git, ["--literal-pathspecs", "ls-files", "-z", "--", relative], in: repoRoot
-        ) else { return false }
-        return result.succeeded && !result.stdout.isEmpty
+        (try? checkTracked(path, repoRoot: repoRoot)) ?? false
+    }
+
+    /// Like `repoRoot(for:)`, but returns nil only when `directory` is genuinely not inside a git
+    /// repository. Any other failure (git missing, "dubious ownership", a locked index) throws.
+    public func findRepoRoot(for directory: URL) throws -> URL? {
+        let args = ["rev-parse", "--show-toplevel"]
+        let result = try runner.run(Self.git, args, in: directory)
+        if !result.succeeded {
+            if result.exitCode == 128 && result.stderr.contains("not a git repository") { return nil }
+            throw Self.failure(args, result)
+        }
+        // Trim only line endings: a path may legitimately end in a space.
+        let text = result.stdout.trimmingCharacters(in: .newlines)
+        guard !text.isEmpty else { return nil }
+        // Git prints the physical path (`/private/var/...`); canonicalise it the same way project
+        // roots are, so the two compare equal.
+        return URL(fileURLWithPath: text, isDirectory: true).resolvingSymlinksInPath()
+    }
+
+    /// Like `isTracked(_:repoRoot:)`, but throws on any git failure (including a path outside the
+    /// repository) instead of answering false.
+    public func checkTracked(_ path: URL, repoRoot: URL) throws -> Bool {
+        guard let relative = Self.relativePath(of: path, in: repoRoot) else {
+            throw GitError.invalidPathspec(path.path)
+        }
+        let args = ["--literal-pathspecs", "ls-files", "-z", "--", relative]
+        let result = try runner.run(Self.git, args, in: repoRoot)
+        guard result.succeeded else { throw Self.failure(args, result) }
+        return !result.stdout.isEmpty
     }
 
     public func currentBranch(_ root: URL) -> String? {
@@ -47,16 +74,22 @@ public struct GitClient: Sendable {
     }
 
     /// Stages and commits exactly `files` (paths relative to `repoRoot`, deletions included).
-    /// Anything else that is modified or staged is left alone.
+    /// Anything else that is modified or staged is left alone, so a path that is empty, absolute,
+    /// the repo root itself or contains a `..` component is rejected rather than staged.
     public func commit(files: [String], message: String, repoRoot: URL) throws {
         guard !files.isEmpty else { return }
+        for file in files where !Self.isSafePathspec(file) {
+            throw GitError.invalidPathspec(file)
+        }
         try runChecked(["--literal-pathspecs", "add", "-A", "--"] + files, in: repoRoot)
         try runChecked(["--literal-pathspecs", "commit", "-m", message, "--"] + files, in: repoRoot)
     }
 
     /// Pushes the current branch. A rejected push is reported through the result, not thrown.
+    /// `GIT_TERMINAL_PROMPT=0` makes git fail instead of waiting for a credential prompt; it is
+    /// set through `env` because the runner's environment is fixed when it is created.
     public func push(repoRoot: URL) throws -> CommandResult {
-        try runner.run(Self.git, ["push"], in: repoRoot)
+        try runner.run("/usr/bin/env", ["GIT_TERMINAL_PROMPT=0", Self.git, "push"], in: repoRoot)
     }
 
     // MARK: - Helpers
@@ -73,20 +106,23 @@ public struct GitClient: Sendable {
 
     private func runChecked(_ args: [String], in directory: URL) throws {
         let result = try runner.run(Self.git, args, in: directory)
-        guard result.succeeded else {
-            throw GitError.commandFailed(
-                command: "git " + args.joined(separator: " "),
-                exitCode: result.exitCode,
-                stderr: result.stderr
-            )
-        }
+        guard result.succeeded else { throw Self.failure(args, result) }
     }
 
-    /// Path with every symlink resolved (so `/var` and `/private/var` compare equal).
+    private static func failure(_ args: [String], _ result: CommandResult) -> GitError {
+        .commandFailed(
+            command: "git " + args.joined(separator: " "), exitCode: result.exitCode,
+            stderr: result.stderr)
+    }
+
+    private static func isSafePathspec(_ path: String) -> Bool {
+        guard !path.isEmpty, !path.hasPrefix("/") else { return false }
+        let components = path.split(separator: "/", omittingEmptySubsequences: true)
+        return !components.isEmpty && !components.contains { $0 == "." || $0 == ".." }
+    }
+
     private static func physicalPath(_ path: String) -> String {
-        guard let resolved = realpath(path, nil) else { return path }
-        defer { free(resolved) }
-        return String(cString: resolved)
+        PhysicalPath.resolve(path) ?? path
     }
 
     /// `path` relative to `root`, or nil if it lies outside it. The root itself is ".".
