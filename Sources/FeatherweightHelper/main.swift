@@ -1,4 +1,3 @@
-import AppKit
 import FeatherweightCore
 import Foundation
 
@@ -23,8 +22,9 @@ enum HelperLog {
     }
 }
 
-let app = NSApplication.shared
-app.setActivationPolicy(.prohibited)
+// No AppKit. FSEvents, the timer, the state-directory source and power notifications are all
+// scheduled on the main queue, which the main run loop drains on the main thread (`dispatchMain()`
+// would park the main thread and run main-queue blocks elsewhere, breaking @MainActor).
 let service = HelperService(paths: HelperPaths.resolve())
 service.start()
-app.run()
+RunLoop.main.run()

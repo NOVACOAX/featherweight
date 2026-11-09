@@ -1,4 +1,3 @@
-import AppKit
 import CoreServices
 import Darwin
 import FeatherweightCore
@@ -43,10 +42,12 @@ final class HelperService {
     /// Jobs queued or running, and the event ID current when the helper became busy. Events after
     /// that ID may be the jobs' own changes, so they are skipped until the jobs are done.
     ///
-    /// A record's `lastFSEventID` can be lower than the IDs of the job's own last changes, because
-    /// the system numbers events a moment after they happen. So after the last job the helper
-    /// stays busy until the stream delivers that job's `history.jsonl` append (a later event, so
-    /// numbered after all of the job's changes), or `fenceTimeout` passes.
+    /// FSEvents lag (Review Focus 2): a record's `lastFSEventID` can be lower than the IDs of the
+    /// job's own last changes, because fseventsd numbers events a moment after they happen
+    /// (observed: record 574888238, the job's own renames 574888243-574888283, delivered after the
+    /// job had finished). So after the last job the helper stays busy until the stream delivers
+    /// that job's `history.jsonl` append (written after all of the job's changes, so numbered
+    /// after them), or `fenceTimeout` passes. See `handle(_:)` and `finished(...)`.
     private var jobsInFlight = 0
     private var busySinceEventID: UInt64 = 0
     private var pendingFence: (above: UInt64, deadline: Date)?
@@ -56,7 +57,7 @@ final class HelperService {
 
     private var timer: DispatchSourceTimer?
     private var stateSource: DispatchSourceFileSystemObject?
-    private var wakeObserver: NSObjectProtocol?
+    private lazy var wakeWatcher = WakeWatcher { [unowned self] in self.didWake() }
 
     init(paths: AppPaths) {
         self.paths = paths
@@ -79,11 +80,7 @@ final class HelperService {
         historyEventPath = Self.physicalPath(paths.base.path) + "/" + paths.history.lastPathComponent
         watcher.watch(watchedFolders)
         startTimer()
-        wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
-            forName: NSWorkspace.didWakeNotification, object: nil, queue: .main
-        ) { [unowned self] _ in
-            MainActor.assumeIsolated { self.didWake() }
-        }
+        wakeWatcher.start()
         runOverdueJobs()
         reschedule()
     }
