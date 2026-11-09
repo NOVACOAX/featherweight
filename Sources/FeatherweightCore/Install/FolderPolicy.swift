@@ -44,6 +44,19 @@ public struct FolderPolicy: Sendable {
         return .ok
     }
 
+    /// Checks folders that were not picked through the folder panel, such as the default
+    /// `~/Developer`: those that pass (as given) and those that do not, with why.
+    /// Blocks like `evaluate`, so call it off the main thread.
+    public func vet(_ folders: [String]) -> (usable: [String], refused: [(path: String, verdict: FolderVerdict)]) {
+        var usable: [String] = []
+        var refused: [(path: String, verdict: FolderVerdict)] = []
+        for folder in folders {
+            let verdict = evaluate(URL(fileURLWithPath: folder, isDirectory: true))
+            if verdict == .ok { usable.append(folder) } else { refused.append((folder, verdict)) }
+        }
+        return (usable, refused)
+    }
+
     /// True when the folder, or a folder above it inside the home folder, is an iCloud item.
     private func isSynced(path: String, homePath: String) -> Bool {
         let keys: Set<URLResourceKey> = [.isUbiquitousItemKey, .ubiquitousItemIsUploadedKey]

@@ -53,11 +53,13 @@ struct Commands {
         let agent = LaunchAgent(paths: paths, runner: ProcessCommandRunner(environment: ProcessInfo.processInfo.environment))
         let installer = CLIInstaller(
             home: paths.home, pathEnv: ProcessInfo.processInfo.environment["PATH"] ?? "")
+        // A link to this very executable is ours even when it is not inside an app bundle.
+        let me = Bundle.main.executableURL?.resolvingSymlinksInPath()
         let helperWasInstalled = agent.isInstalled()
-        let links = installer.installedLinks()
+        let links = installer.installedLinks(cli: me)
         do {
             try agent.uninstall()
-            try installer.uninstall()
+            try installer.uninstall(cli: me)
         } catch {
             Output.error("Could not uninstall: \(error.localizedDescription)")
             return 1

@@ -75,17 +75,17 @@ final class AppModel {
         volumeName = try? paths.home.resourceValues(forKeys: [.volumeNameKey]).volumeName
         launchAgentInstalled = FileManager.default.fileExists(
             atPath: paths.launchAgentsDir.appendingPathComponent("\(LaunchAgent.label).plist").path)
-        cliCommandInstalled = !Self.cliInstaller(paths: paths, pathEnv: "").installedLinks().isEmpty
-    }
-
-    private static func cliInstaller(paths: AppPaths, pathEnv: String) -> CLIInstaller {
-        CLIInstaller(home: paths.home, pathEnv: pathEnv)
+        cliCommandInstalled = !CLIInstaller(home: paths.home, pathEnv: "")
+            .installedLinks(cli: HelperLocator.cliExecutable()).isEmpty
     }
 
     // MARK: Jobs
 
-    func runDedupe(preview: Bool, trigger: JobTrigger = .manualApp) async {
-        guard begin(.dedupe) else { return }
+    /// Runs the dedupe job. Returns what went wrong with this run (it did not start, or did not
+    /// run), or nil. The same text is shown in `notice`.
+    @discardableResult
+    func runDedupe(preview: Bool, trigger: JobTrigger = .manualApp) async -> String? {
+        if let refusal = begin(.dedupe) { return refusal }
         let paths = paths
         let (report, record) = await Task.detached(priority: .background) { [weak self] in
             // Made here, not on the main actor: it reads the login-shell environment, which can take seconds.
@@ -93,40 +93,52 @@ final class AppModel {
                 Task { @MainActor in self?.waitingForLock = true }
             }
         }.value
-        finish(preview: preview, record: record, errors: report.errors) { .dedupe(report) }
+        return finish(preview: preview, record: record, errors: report.errors) { .dedupe(report) }
     }
 
-    func runClean(preview: Bool, only: [URL]? = nil, trigger: JobTrigger = .manualApp) async {
-        guard begin(.clean) else { return }
+    /// Runs the clean job; see `runDedupe`.
+    @discardableResult
+    func runClean(preview: Bool, only: [URL]? = nil, trigger: JobTrigger = .manualApp) async -> String? {
+        if let refusal = begin(.clean) { return refusal }
         let paths = paths
         let (report, record) = await Task.detached(priority: .background) { [weak self] in
             JobRunner(paths: paths).clean(trigger: trigger, only: only, dryRun: preview) {
                 Task { @MainActor in self?.waitingForLock = true }
             }
         }.value
-        finish(preview: preview, record: record, errors: report.errors) { .clean(report) }
+        return finish(preview: preview, record: record, errors: report.errors) { .clean(report) }
     }
 
-    private func begin(_ kind: JobKind) -> Bool {
-        guard runningJob == nil else { return false }
+    static let busyNotice = "Another Featherweight job is running. Try again when it has finished."
+
+    /// Marks `kind` as running and clears the last run's notice. If a job is already running it
+    /// starts nothing and returns (and shows) why.
+    private func begin(_ kind: JobKind) -> String? {
+        guard runningJob == nil else {
+            notice = Self.busyNotice
+            return Self.busyNotice
+        }
         runningJob = kind
         waitingForLock = false
         notice = nil
-        return true
+        return nil
     }
 
     private func finish(
         preview: Bool, record: RunRecord?, errors: [String], result: () -> PreviewResult
-    ) {
+    ) -> String? {
         runningJob = nil
         waitingForLock = false
+        var problem: String?
         if preview {
             previewResult = result()
         } else if record == nil {
             // A real run with no record did not run at all; the errors say why.
-            notice = errors.isEmpty ? "The job did not run." : errors.joined(separator: "\n")
+            problem = errors.isEmpty ? "The job did not run." : errors.joined(separator: "\n")
+            notice = problem
         }
         reload()
+        return problem
     }
 
     // MARK: Settings and helper
@@ -214,7 +226,7 @@ final class AppModel {
                     let pathEnv = LoginShellEnvironment.shared["PATH"] ?? ""
                     _ = try CLIInstaller(home: paths.home, pathEnv: pathEnv).install(cli: cli)
                 } else {
-                    try CLIInstaller(home: paths.home, pathEnv: "").uninstall()
+                    try CLIInstaller(home: paths.home, pathEnv: "").uninstall(cli: cli)
                 }
                 return .done
             } catch CLIInstallError.noWritableDirectoryOnPath(let line) {
@@ -233,6 +245,59 @@ final class AppModel {
 
     // MARK: First launch
 
+    enum FirstLaunchEstimateState: Equatable {
+        case noFolder
+        case scanning
+        case ready(FirstLaunchEstimate)
+    }
+
+    /// What the first launch screen shows. "Start saving space" waits for `.ready`.
+    private(set) var firstLaunchEstimate = FirstLaunchEstimateState.scanning
+    @ObservationIgnored private var estimating = false
+    @ObservationIgnored private var estimateAgain = false
+
+    /// Checks the projects folders, then counts what could be saved. Only one count runs at a
+    /// time; a request that arrives meanwhile queues one more run with the settings as they are
+    /// by then (earlier answers are discarded). Safe to call whenever the settings change.
+    func refreshFirstLaunchEstimate() {
+        guard !settings.onboardingComplete else { return }
+        firstLaunchEstimate = .scanning
+        guard !estimating else {
+            estimateAgain = true
+            return
+        }
+        estimating = true
+        Task {
+            repeat {
+                estimateAgain = false
+                await refuseUnusableFolders()
+                if settings.projectFolders.isEmpty {
+                    firstLaunchEstimate = .noFolder
+                    continue
+                }
+                let paths = paths
+                let found = await Task.detached(priority: .background) {
+                    FirstLaunchEstimate.compute(paths: paths)
+                }.value
+                if !estimateAgain { firstLaunchEstimate = .ready(found) }
+            } while estimateAgain && !settings.onboardingComplete
+            estimating = false
+        }
+    }
+
+    /// The default projects folder (and any other folder that did not come through the folder
+    /// panel) gets the same check as a chosen one: a folder that is refused is dropped from the
+    /// settings, so it is neither counted nor scanned, and the user is told why.
+    private func refuseUnusableFolders() async {
+        let folders = settings.projectFolders
+        guard !folders.isEmpty else { return }
+        let home = paths.home
+        let result = await Task.detached(priority: .utility) { FolderPolicy(home: home).vet(folders) }.value
+        guard !result.refused.isEmpty else { return }
+        updateSettings { $0.projectFolders.removeAll { folder in result.refused.contains { $0.path == folder } } }
+        notice = result.refused.map { FolderMessages.refusal(for: $0.verdict, folder: $0.path) }.joined(separator: "\n")
+    }
+
     /// "Start saving space": saves the settings as complete, starts the helper, then shares
     /// duplicates and clears caches once. The first launch window gives way to the main window as
     /// soon as the settings are saved, so progress shows on the Overview.
@@ -241,13 +306,12 @@ final class AppModel {
         updated.onboardingComplete = true
         guard saveSettings(updated) else { return }
 
-        // Each job clears the notice when it starts, so collect what goes wrong and show it at the end.
+        // Each job clears the notice when it starts, so collect what goes wrong in each run
+        // and show it all at the end.
         var problems: [String] = []
         if let failure = await installHelper() { problems.append("Could not start the helper: \(failure)") }
-        await runDedupe(preview: false, trigger: .firstLaunch)
-        if let notice { problems.append(notice) }
-        await runClean(preview: false, trigger: .firstLaunch)
-        if let notice { problems.append(notice) }
+        if let problem = await runDedupe(preview: false, trigger: .firstLaunch) { problems.append(problem) }
+        if let problem = await runClean(preview: false, trigger: .firstLaunch) { problems.append(problem) }
         notice = problems.isEmpty ? nil : problems.joined(separator: "\n")
     }
 

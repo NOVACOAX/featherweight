@@ -228,8 +228,9 @@ final class HelperService {
     private func rescanProjects() {
         lastRescan = Date()
         let settings = settings
+        let home = paths.home
         scanQueue.async { [weak self] in
-            let found = ProjectScanner(excludedDirectoryNames: ProjectScanner.excludedNames(for: settings))
+            let found = ProjectScanner(excludedDirectoryNames: ProjectScanner.excludedNames(for: settings), home: home)
                 .scan(folders: settings.projectFolders.map { URL(fileURLWithPath: $0, isDirectory: true) })
             let roots = found.map { PhysicalPath.resolve($0.root.path) ?? $0.root.path }
             let matchable = zip(found, roots).map { project, root in

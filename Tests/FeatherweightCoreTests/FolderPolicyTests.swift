@@ -79,6 +79,40 @@ import Testing
     }
 }
 
+@Suite struct FolderPolicyVetTests {
+    @Test func theDefaultProjectsFolderIsCheckedLikeAnyOther() throws {
+        // ~/Developer is a link into a synced folder: the default settings pick it, the policy refuses it.
+        let tree = try TempTree(["Library/CloudStorage/Dropbox/dev/": ""])
+        defer { tree.remove() }
+        try FileManager.default.createSymbolicLink(
+            at: tree.url("Developer"), withDestinationURL: tree.url("Library/CloudStorage/Dropbox/dev"))
+        let defaults = Settings.defaults(home: tree.root)
+        #expect(defaults.projectFolders == [tree.url("Developer").path])
+
+        let result = FolderPolicy(home: tree.root).vet(defaults.projectFolders)
+
+        #expect(result.usable.isEmpty)
+        #expect(result.refused.map(\.verdict) == [.rejectedSync])
+        #expect(result.refused.map(\.path) == [tree.url("Developer").path])
+    }
+
+    @Test func ordinaryFoldersPassAndOrderIsKept() throws {
+        let tree = try TempTree(["Developer/": "", "Work/": "", "Library/Mobile Documents/x/": ""])
+        defer { tree.remove() }
+        let paths = [tree.url("Developer").path, tree.url("Library/Mobile Documents/x").path, tree.url("Work").path]
+
+        let result = FolderPolicy(home: tree.root).vet(paths)
+
+        #expect(result.usable == [paths[0], paths[2]])
+        #expect(result.refused.map(\.path) == [paths[1]])
+    }
+
+    @Test func noFoldersMeansNothingToVet() {
+        let result = FolderPolicy(home: URL(fileURLWithPath: "/nonexistent-home")).vet([])
+        #expect(result.usable.isEmpty && result.refused.isEmpty)
+    }
+}
+
 @Suite struct CustomCacheFolderTests {
     private let existing = [CacheFolderSetting(relativePath: ".next", enabled: true, isBuiltIn: true)]
 

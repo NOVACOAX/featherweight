@@ -121,7 +121,7 @@ public final class JobRunner: @unchecked Sendable {
 
     private func loadContext(only: [URL]? = nil) -> Context {
         let settings = SettingsStore(paths: paths).load()
-        let all = ProjectScanner(excludedDirectoryNames: ProjectScanner.excludedNames(for: settings))
+        let all = ProjectScanner(excludedDirectoryNames: ProjectScanner.excludedNames(for: settings), home: paths.home)
             .scan(folders: settings.projectFolders.map { URL(fileURLWithPath: $0, isDirectory: true) })
         var run = all
         if let only {

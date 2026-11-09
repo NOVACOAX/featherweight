@@ -70,11 +70,22 @@ enum SnapshotMode {
             }
         }
         if only?.contains("onboarding") ?? true {
-            // The estimate is computed by the view itself (dry runs in the background); give it time.
-            let started = Date()
-            let paths = model.paths
-            let found = await Task.detached { FirstLaunchEstimate.compute(paths: paths) }.value
-            print("first launch estimate: \(found) in \(Date().timeIntervalSince(started)) s")
+            // Many requests in a row (settings changing while a count runs) must not pile up scans.
+            let before = FirstLaunchEstimate.computeCount.withLock { $0 }
+            for _ in 0..<6 { model.refreshFirstLaunchEstimate() }
+            for _ in 0..<100 {
+                if case .ready = model.firstLaunchEstimate { break }
+                try? await Task.sleep(for: .milliseconds(100))
+            }
+            let counted = FirstLaunchEstimate.computeCount.withLock { $0 } - before
+            print("first launch estimate after 6 requests: \(model.firstLaunchEstimate); scans started: \(counted); notice: \(model.notice ?? "none")")
+            // A second job started while one runs is refused, with the reason.
+            async let running = model.runDedupe(preview: true)
+            let refused = await model.runClean(preview: true)
+            let other = await running
+            print("two jobs at once: clean -> \(refused ?? "started"), dedupe -> \(other ?? "started"); notice: \(model.notice ?? "none")")
+            model.previewResult = nil
+            model.notice = nil
             for dark in [false, true] {
                 await snapshotWaiting(OnboardingView(model: model).tint(Theme.amber).background(.background),
                          size: CGSize(width: 560, height: 560), dark: dark, seconds: 1.5,

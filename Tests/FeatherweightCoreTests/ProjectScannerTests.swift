@@ -135,3 +135,53 @@ import Testing
         #expect(nested.parentRoot == viaParent.root)
     }
 }
+
+@Suite struct ProjectScannerSyncFolderTests {
+    private func fixture() throws -> TempTree {
+        try TempTree([
+            "Developer/ok/package.json": "{}",
+            "Library/Mobile Documents/com~apple~CloudDocs/icloud-app/package.json": "{}",
+            "Library/CloudStorage/Dropbox/dropbox-app/package.json": "{}",
+            "Library/CloudStorage/GoogleDrive-a/nested/deep/package.json": "{}",
+            "Library/Other/package.json": "{}",
+        ])
+    }
+
+    @Test func scanningAParentOfTheHomeFindsNoProjectsInSyncFolders() throws {
+        let tree = try fixture()
+        defer { tree.remove() }
+        let scanner = ProjectScanner(excludedDirectoryNames: [], home: tree.root)
+
+        let names = scanner.scan(folders: [tree.root]).map(\.root.lastPathComponent)
+
+        #expect(Set(names) == ["ok", "Other"])
+        #expect(!names.contains("icloud-app") && !names.contains("dropbox-app") && !names.contains("deep"))
+    }
+
+    @Test func scanningInsideASyncFolderFindsNothing() throws {
+        let tree = try fixture()
+        defer { tree.remove() }
+        let scanner = ProjectScanner(excludedDirectoryNames: [], home: tree.root)
+
+        #expect(scanner.scan(folders: [tree.url("Library/CloudStorage/Dropbox")]).isEmpty)
+        #expect(scanner.scan(folders: [tree.url("Library/Mobile Documents")]).isEmpty)
+    }
+
+    @Test func aFolderLinkedIntoASyncFolderFindsNothing() throws {
+        let tree = try fixture()
+        defer { tree.remove() }
+        try FileManager.default.createSymbolicLink(
+            at: tree.url("Developer/link"), withDestinationURL: tree.url("Library/CloudStorage/Dropbox"))
+        let scanner = ProjectScanner(excludedDirectoryNames: [], home: tree.root)
+
+        #expect(scanner.scan(folders: [tree.url("Developer/link")]).isEmpty)
+    }
+
+    @Test func projectsOutsideTheSyncFoldersAreStillFound() throws {
+        let tree = try fixture()
+        defer { tree.remove() }
+        let scanner = ProjectScanner(excludedDirectoryNames: [], home: tree.root)
+
+        #expect(scanner.scan(folders: [tree.url("Developer")]).map(\.root.lastPathComponent) == ["ok"])
+    }
+}

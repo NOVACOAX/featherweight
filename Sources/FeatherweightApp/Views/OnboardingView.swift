@@ -6,13 +6,6 @@ struct OnboardingView: View {
     let model: AppModel
     @Environment(\.openSettings) private var openSettings
 
-    enum Estimate: Equatable {
-        case noFolder
-        case scanning
-        case ready(FirstLaunchEstimate)
-    }
-
-    @State private var estimate = Estimate.scanning
     @State private var choosingFolder = false
 
     private var folder: String? { model.settings.projectFolders.first }
@@ -36,7 +29,7 @@ struct OnboardingView: View {
                     .controlSize(.large)
                 Button("Start saving space") { Task { await model.startSavingSpace() } }
                     .buttonStyle(AmberButtonStyle())
-                    .disabled(folder == nil)
+                    .disabled(!isReady)
             }
         }
         .padding(.horizontal, 40)
@@ -50,17 +43,14 @@ struct OnboardingView: View {
                     .padding(.vertical, 10)
             }
         }
-        // Whenever the folder or a cache choice changes (here or in Settings), count again.
-        .task(id: model.settings) {
-            guard folder != nil else {
-                estimate = .noFolder
-                return
-            }
-            estimate = .scanning
-            let paths = model.paths
-            let result = await Task.detached(priority: .utility) { FirstLaunchEstimate.compute(paths: paths) }.value
-            if !Task.isCancelled { estimate = .ready(result) }
-        }
+        // Whenever the folder or a cache choice changes (here or in Settings), count again. The
+        // model runs one count at a time and checks the folders first.
+        .task(id: model.settings) { model.refreshFirstLaunchEstimate() }
+    }
+
+    private var isReady: Bool {
+        if case .ready = model.firstLaunchEstimate { return folder != nil }
+        return false
     }
 
     // MARK: Folder
@@ -107,7 +97,7 @@ struct OnboardingView: View {
 
     private var foundCard: some View {
         Group {
-            switch estimate {
+            switch model.firstLaunchEstimate {
             case .noFolder:
                 Text("Choose the folder where your projects live and Featherweight will show what it can free. Nothing is changed until you start.")
             case .scanning:

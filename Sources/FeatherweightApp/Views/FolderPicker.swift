@@ -1,6 +1,28 @@
 import AppKit
 import FeatherweightCore
 
+/// The words used when a folder is refused, in the alerts and in the first launch banner.
+enum FolderMessages {
+    static let syncRefusal = "Featherweight can't manage folders in iCloud Drive or other synced folders. "
+        + "Offloaded files would need downloading and every change would re-sync."
+
+    static func accessInstructions(folder: String) -> String {
+        "macOS keeps this folder private. In System Settings → Privacy & Security → "
+            + "Files and Folders, allow access for both “Featherweight” and “Featherweight Helper”, "
+            + "then add the folder again."
+    }
+
+    /// For a folder that was not used and was not picked by the user just now.
+    static func refusal(for verdict: FolderVerdict, folder path: String) -> String {
+        let name = URL(fileURLWithPath: path).lastPathComponent
+        switch verdict {
+        case .rejectedSync: return "“\(name)” was not used. \(syncRefusal) Choose another folder."
+        case .needsAccess: return "“\(name)” was not used yet. \(accessInstructions(folder: name)) Or choose another folder."
+        case .ok: return ""
+        }
+    }
+}
+
 /// Asking the user for a projects folder, and refusing the ones Featherweight cannot manage.
 @MainActor
 enum FolderPicker {
@@ -42,8 +64,7 @@ enum FolderPicker {
         let alert = NSAlert()
         alert.alertStyle = .warning
         alert.messageText = "This folder can't be used"
-        alert.informativeText = "Featherweight can't manage folders in iCloud Drive or other synced folders. "
-            + "Offloaded files would need downloading and every change would re-sync."
+        alert.informativeText = FolderMessages.syncRefusal
         alert.addButton(withTitle: "OK")
         alert.runModal()
     }
@@ -52,9 +73,7 @@ enum FolderPicker {
         let alert = NSAlert()
         alert.alertStyle = .informational
         alert.messageText = "Allow access to “\(folder)” first"
-        alert.informativeText = "macOS keeps this folder private. In System Settings → Privacy & Security → "
-            + "Files and Folders, allow access for both “Featherweight” and “Featherweight Helper”, "
-            + "then add the folder again."
+        alert.informativeText = FolderMessages.accessInstructions(folder: folder)
         alert.addButton(withTitle: "Open System Settings")
         alert.addButton(withTitle: "Cancel")
         if alert.runModal() == .alertFirstButtonReturn {

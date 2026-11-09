@@ -11,8 +11,8 @@ import Testing
         let cli: URL
 
         init(_ files: [String: String] = [:]) throws {
-            tree = try TempTree(files.merging(["App/featherweight": "#!/bin/sh\n"]) { $1 })
-            cli = tree.url("App/featherweight")
+            tree = try TempTree(files.merging(["Featherweight.app/Contents/Helpers/featherweight": "#!/bin/sh\n"]) { $1 })
+            cli = tree.url("Featherweight.app/Contents/Helpers/featherweight")
             try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: cli.path)
         }
 
@@ -90,9 +90,9 @@ import Testing
     }
 
     @Test func installingAgainPointsTheLinkAtTheNewExecutable() throws {
-        let fixture = try Fixture([".local/bin/": "", "Moved/featherweight": "#!/bin/sh\n"])
+        let fixture = try Fixture([".local/bin/": "", "Moved/Featherweight.app/Contents/Helpers/featherweight": "#!/bin/sh\n"])
         defer { fixture.tree.remove() }
-        let moved = fixture.tree.url("Moved/featherweight")
+        let moved = fixture.tree.url("Moved/Featherweight.app/Contents/Helpers/featherweight")
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: moved.path)
         let installer = fixture.installer(path: fixture.localBin.path)
 
@@ -129,7 +129,7 @@ import Testing
     @Test func installRefusesAMissingExecutable() throws {
         let fixture = try Fixture([".local/bin/": ""])
         defer { fixture.tree.remove() }
-        let missing = fixture.tree.url("App/nope")
+        let missing = fixture.tree.url("Featherweight.app/nope")
 
         #expect(throws: CLIInstallError.executableNotFound(missing)) {
             try fixture.installer(path: fixture.localBin.path).install(cli: missing)
@@ -152,6 +152,50 @@ import Testing
         #expect((try? FileManager.default.destinationOfSymbolicLink(atPath: ours.path)) == nil)
         #expect((try? FileManager.default.destinationOfSymbolicLink(
             atPath: fixture.brewBin.appendingPathComponent("featherweight").path)) != nil)
+    }
+
+    /// A Homebrew-style link: relative target into a Cellar, named featherweight, not in an app bundle.
+    private func addCellarLink(_ fixture: Fixture, in directory: URL) throws -> URL {
+        try FileManager.default.createDirectory(
+            at: fixture.tree.url("Cellar/featherweight/1.0/bin"), withIntermediateDirectories: true)
+        try Data("#!/bin/sh\n".utf8).write(to: fixture.tree.url("Cellar/featherweight/1.0/bin/featherweight"))
+        let link = directory.appendingPathComponent("featherweight")
+        try FileManager.default.createSymbolicLink(
+            atPath: link.path, withDestinationPath: "../../Cellar/featherweight/1.0/bin/featherweight")
+        return link
+    }
+
+    @Test func aHomebrewCellarLinkIsNeverReplacedOrRemoved() throws {
+        let fixture = try Fixture([".local/bin/": "", "brew/bin/": ""])
+        defer { fixture.tree.remove() }
+        let cellar = try addCellarLink(fixture, in: fixture.brewBin)
+        let installer = fixture.installer(path: "\(fixture.brewBin.path):\(fixture.localBin.path)")
+
+        #expect(installer.installedLinks().isEmpty)
+        // brew/bin is first on PATH among the writable candidates only if ~/.local/bin is not usable.
+        let brewOnly = fixture.installer(path: fixture.brewBin.path)
+        #expect(throws: CLIInstallError.fileInTheWay(cellar)) { try brewOnly.install(cli: fixture.cli) }
+        try installer.uninstall()
+        try installer.uninstall(cli: fixture.cli)
+
+        #expect(try FileManager.default.destinationOfSymbolicLink(atPath: cellar.path)
+            == "../../Cellar/featherweight/1.0/bin/featherweight")
+    }
+
+    @Test func aLinkToTheCLIWeWereToldAboutIsOursEvenOutsideAnAppBundle() throws {
+        let fixture = try Fixture([".local/bin/": "", "dev/featherweight": "#!/bin/sh\n"])
+        defer { fixture.tree.remove() }
+        let dev = fixture.tree.url("dev/featherweight")
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: dev.path)
+        let installer = fixture.installer(path: fixture.localBin.path)
+
+        let link = try installer.install(cli: dev)
+
+        #expect(installer.installedLinks().isEmpty)               // not recognisable without being told
+        #expect(installer.installedLinks(cli: dev) == [link])
+        _ = try installer.install(cli: dev)                        // re-install replaces it
+        try installer.uninstall(cli: dev)
+        #expect((try? FileManager.default.destinationOfSymbolicLink(atPath: link.path)) == nil)
     }
 
     @Test func uninstallWithNothingInstalledIsFine() throws {

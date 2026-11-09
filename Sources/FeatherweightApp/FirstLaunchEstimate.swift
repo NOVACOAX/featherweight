@@ -1,5 +1,6 @@
 import FeatherweightCore
 import Foundation
+import os
 
 /// What the first launch tells the user before it changes anything, found with dry runs.
 struct FirstLaunchEstimate: Equatable, Sendable {
@@ -9,10 +10,18 @@ struct FirstLaunchEstimate: Equatable, Sendable {
     /// What clearing the chosen cache folders would free.
     var cacheBytes: Int64
 
+    #if DEBUG
+    /// How many times `compute` has started (the snapshot mode checks that requests are coalesced).
+    static let computeCount = OSAllocatedUnfairLock(initialState: 0)
+    #endif
+
     /// Blocks while it scans and hashes, so run it off the main actor. Reads the saved settings.
     static func compute(paths: AppPaths) -> FirstLaunchEstimate {
+        #if DEBUG
+        computeCount.withLock { $0 += 1 }
+        #endif
         let settings = SettingsStore(paths: paths).load()
-        let projects = ProjectScanner(excludedDirectoryNames: ProjectScanner.excludedNames(for: settings))
+        let projects = ProjectScanner(excludedDirectoryNames: ProjectScanner.excludedNames(for: settings), home: paths.home)
             .scan(folders: settings.projectFolders.map { URL(fileURLWithPath: $0, isDirectory: true) })
         let jobs = JobRunner(paths: paths)
         let (dedupe, _) = jobs.dedupe(trigger: .firstLaunch, dryRun: true)
