@@ -5,14 +5,26 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-echo "==> Enabling the pre-push release hook (core.hooksPath = scripts/hooks)"
-git config core.hooksPath scripts/hooks
-
-echo "==> Checking GitHub CLI login"
+echo "==> Checking GitHub CLI"
+# Before touching git config: the hook needs gh, so don't install it without.
 if ! command -v gh >/dev/null 2>&1; then
     echo "error: gh is not installed. Install it (brew install gh), run 'gh auth login', then re-run this script." >&2
     exit 1
 fi
+
+echo "==> Enabling the pre-push release hook (core.hooksPath = scripts/hooks)"
+current_hooks="$(git config --get core.hooksPath || true)"
+if [[ -n "$current_hooks" && "$current_hooks" != "scripts/hooks" ]]; then
+    echo "core.hooksPath is already set to \"$current_hooks\"; continuing replaces it, and hooks there stop running."
+    read -r -p "Replace it with scripts/hooks? [y/N] " replace || replace="n"   # no input (EOF) means no
+    case "$replace" in
+        [yY]*) ;;
+        *) echo "Left core.hooksPath alone; the release hook is not installed." >&2; exit 1 ;;
+    esac
+fi
+git config core.hooksPath scripts/hooks
+
+echo "==> Checking GitHub CLI login"
 if ! gh auth status >/dev/null 2>&1; then
     echo "error: gh is not logged in. Run 'gh auth login', then re-run this script." >&2
     exit 1

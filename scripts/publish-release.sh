@@ -1,9 +1,12 @@
 #!/bin/bash
-# Usage: scripts/publish-release.sh VERSION SHA
-# Run detached by the pre-push hook. Waits (up to 10 minutes) for SHA to arrive as origin's main,
-# then creates the GitHub release from build/release/Featherweight-VERSION.zip. Notifies either way.
+# Usage: scripts/publish-release.sh VERSION SHA REMOTE
+# Run detached by the pre-push hook. Waits (up to 10 minutes) for SHA to be on REMOTE's main (as its
+# tip, or an ancestor of it), then creates the GitHub release from build/release/Featherweight-VERSION.zip.
+# Does nothing if the release already exists. Notifies either way.
 # Test knobs: FEATHERWEIGHT_POLL_INTERVAL (default 5s), FEATHERWEIGHT_POLL_TIMEOUT (default 600s).
 set -euo pipefail
+
+export GIT_TERMINAL_PROMPT=0   # detached: a credential prompt would hang or fail, never wait
 
 REPO="NOVACOAX/featherweight"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -19,12 +22,13 @@ notify() {
     osascript -e "display notification \"$message\" with title \"Featherweight release\"" >/dev/null 2>&1 || true
 }
 
-if [[ $# -ne 2 ]]; then
-    echo "usage: scripts/publish-release.sh VERSION SHA" >&2
+if [[ $# -ne 3 ]]; then
+    echo "usage: scripts/publish-release.sh VERSION SHA REMOTE" >&2
     exit 2
 fi
 VERSION="$1"
 SHA="$2"
+REMOTE="$3"
 ZIP="build/release/Featherweight-$VERSION.zip"
 
 FINISHED=0
@@ -45,18 +49,33 @@ if ! gh repo view "$REPO" >/dev/null 2>&1 </dev/null; then
     fail "GitHub repo $REPO does not exist yet (or gh cannot see it)"
 fi
 
-log "waiting up to ${TIMEOUT}s for origin/main to reach $SHA"
+# True once SHA is the remote main's tip, or an ancestor of it (later commits may have landed already).
+main_has_sha() {
+    [[ -n "$remote" ]] || return 1
+    [[ "$remote" == "$SHA" ]] && return 0
+    git fetch --quiet "$REMOTE" refs/heads/main </dev/null >/dev/null 2>&1 || return 1
+    git merge-base --is-ancestor "$SHA" FETCH_HEAD 2>/dev/null
+}
+
+log "waiting up to ${TIMEOUT}s for $REMOTE/main to reach $SHA"
 SECONDS=0
 while :; do
-    remote="$(git ls-remote origin refs/heads/main 2>/dev/null </dev/null | cut -f1 | head -n1 || true)"
-    [[ "$remote" == "$SHA" ]] && break
+    remote="$(git ls-remote "$REMOTE" refs/heads/main 2>/dev/null </dev/null | cut -f1 | head -n1 || true)"
+    main_has_sha && break
     if (( SECONDS >= TIMEOUT )); then
-        fail "origin/main never reached $SHA within ${TIMEOUT}s (last seen: ${remote:-nothing}); was the push rejected?"
+        fail "$REMOTE/main never reached $SHA within ${TIMEOUT}s (last seen: ${remote:-nothing}); was the push rejected?"
     fi
     sleep "$INTERVAL"
 done
 
-log "main is at $SHA; creating release v$VERSION"
+if gh release view "v$VERSION" --repo "$REPO" >/dev/null 2>&1 </dev/null; then
+    log "release v$VERSION already exists; nothing to do"
+    notify "Featherweight $VERSION is already published."
+    FINISHED=1
+    exit 0
+fi
+
+log "main has $SHA; creating release v$VERSION"
 if ! gh release create "v$VERSION" "$ZIP" --repo "$REPO" --target "$SHA" \
         --title "Featherweight $VERSION" --generate-notes </dev/null; then
     fail "gh release create failed"

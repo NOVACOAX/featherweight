@@ -129,8 +129,8 @@ background priority with throttled disk access, and the whole download is about 
 1. Open the [Releases page](https://github.com/NOVACOAX/featherweight/releases) and download
    the latest `Featherweight-<version>.zip`.
 2. Double-click the zip to unpack it, and drag **Featherweight** into your **Applications**
-   folder. (Running it from Downloads works, but the app will ask you to move it first, so
-   that the background helper can find it later.)
+   folder. If you open it from Downloads, it asks you to move it to Applications first, so
+   move it there before opening.
 3. Open it. macOS will stop you the first time, see below.
 
 ## First launch
@@ -138,10 +138,14 @@ background priority with throttled disk access, and the whole download is about 
 <!-- TODO: verify wording after first real install. The message text and the Open Anyway steps below are written from current macOS wording and have not yet been checked on a fresh download. -->
 
 Featherweight isn't notarized by Apple, because that takes a paid Apple Developer account
-and this is a free project. So the first time you open it, macOS says:
+and this is a free project. So the first time you open it, macOS 15 and later says:
 
 > "Featherweight" Not Opened — Apple could not verify "Featherweight" is free of malware that
 > may harm your Mac or compromise your privacy.
+
+On macOS 14 the wording is different:
+
+> “Featherweight” can't be opened because Apple cannot check it for malicious software.
 
 That message is how macOS treats every app that isn't notarized. To open Featherweight
 anyway:
@@ -171,7 +175,8 @@ access, notifications and login-item approval you give it from one update to the
 
 On the first screen, Featherweight offers `~/Developer` as your projects folder if it
 exists, or asks you to pick one. It then scans and shows what it expects to free ("Found 23
-projects. About 2.8 GB of duplicates, 12.6 GB of caches. Nothing has been changed yet").
+projects. About 2.8 GB of duplicate files can be shared, and 12.6 GB of build caches can be
+cleared. Nothing has been changed yet.").
 
 - **Start saving space** turns on the background helper and runs both jobs right away.
   After that they follow their schedules.

@@ -2,7 +2,8 @@
 # Creates the self-signed code-signing identity "Featherweight Self-Signed" in the login keychain
 # and trusts it for code signing. Signing every build with the same identity keeps the app's
 # designated requirement stable across updates, so macOS permissions survive them.
-# Prompts for your login password once (the trust step). Safe to re-run: exits if it exists.
+# Prompts for your login password once (the trust step). Safe to re-run: exits if it is already a
+# valid identity, and only re-runs the trust step if the certificate is there but not yet trusted.
 set -euo pipefail
 
 NAME="Featherweight Self-Signed"
@@ -20,6 +21,17 @@ fi
 WORK="$(mktemp -d)"
 chmod 700 "$WORK"
 trap 'rm -rf "$WORK"' EXIT   # the private key never outlives this script outside the keychain
+
+# The certificate is already imported (an earlier run stopped before trusting it): trust it, and
+# don't import a second copy.
+if security find-certificate -c "$NAME" "$KEYCHAIN" >/dev/null 2>&1; then
+    echo "==> \"$NAME\" is in the keychain but not a valid code-signing identity yet; trusting it"
+    security find-certificate -c "$NAME" -p "$KEYCHAIN" > "$WORK/cert.pem"
+    security add-trusted-cert -p codeSign -k "$KEYCHAIN" "$WORK/cert.pem"
+    echo "==> Code-signing identities"
+    security find-identity -p codesigning
+    exit 0
+fi
 
 # A throwaway passphrase only protects the temporary .p12 between openssl and security.
 P12_PASS="$("$OPENSSL" rand -hex 16)"

@@ -1,13 +1,24 @@
 #!/bin/bash
-# Pre-push hook: when a push lands a new VERSION on main, build the release zip now (a failed
-# build stops the push) and start a detached publisher that creates the GitHub release once
-# main has actually arrived on the remote.
-# git feeds one line per ref on stdin: <local ref> <local sha> <remote ref> <remote sha>
+# Pre-push hook: when a push to the Featherweight GitHub repo lands a new VERSION on main, build the
+# release zip now (a failed build stops the push) and start a detached publisher that creates the
+# GitHub release once main has actually arrived on the remote.
+# git passes <remote name> <remote url> as arguments and feeds one line per ref on stdin:
+#   <local ref> <local sha> <remote ref> <remote sha>
 set -euo pipefail
 
 REPO="NOVACOAX/featherweight"
+REMOTE_NAME="${1:-origin}"
+REMOTE_URL="${2:-}"
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"
+
+# Only act on pushes to the Featherweight repo on github.com (https or ssh form).
+url_lc="$(tr '[:upper:]' '[:lower:]' <<<"$REMOTE_URL")"
+repo_lc="$(tr '[:upper:]' '[:lower:]' <<<"$REPO")"
+if [[ ! "$url_lc" =~ ^(https://([^@/]+@)?github\.com/|git@github\.com:|ssh://git@github\.com(:[0-9]+)?/)${repo_lc}(\.git)?/?$ ]]; then
+    cat >/dev/null   # nothing to release; drain the ref list
+    exit 0
+fi
 
 # Read every line first so nothing we run below can consume the ref list.
 refs=()
@@ -16,8 +27,24 @@ while read -r local_ref local_sha remote_ref remote_sha || [[ -n "${local_ref:-}
     local_ref=""
 done
 
+GH_ERR="$(mktemp)"
+trap 'rm -f "$GH_ERR"' EXIT
+
+# Prints the version of the latest release ("" when the repo has none). Returns 1 when gh failed for
+# any other reason (offline, logged out, rate-limited), so the caller can use another source.
+latest_release() {
+    local tag
+    if tag="$(gh release view --repo "$REPO" --json tagName -q .tagName 2>"$GH_ERR" </dev/null)"; then
+        echo "${tag#v}"
+    elif grep -qi 'release not found' "$GH_ERR"; then
+        echo ""
+    else
+        return 1
+    fi
+}
+
 release_for() {
-    local sha="$1" new latest
+    local sha="$1" remote_sha="$2" new latest previous
     if ! new="$(git show "$sha:VERSION" 2>/dev/null | tr -d '[:space:]')" || [[ -z "$new" ]]; then
         echo "pre-push: cannot read VERSION at ${sha:0:8}; push stopped." >&2
         return 1
@@ -27,19 +54,38 @@ release_for() {
         return 1
     fi
 
-    latest="$(gh release view --repo "$REPO" --json tagName -q .tagName 2>/dev/null </dev/null | sed 's/^v//')" || latest=""
-    if [[ "$new" == "$latest" ]]; then
-        return 0
+    if latest="$(latest_release)"; then
+        if [[ "$new" == "$latest" ]]; then
+            return 0
+        fi
+    else
+        echo "pre-push: could not ask GitHub for the latest release ($(head -n1 "$GH_ERR"));" >&2
+        echo "          comparing VERSION with the remote's main instead." >&2
+        latest=""
+        if [[ "$remote_sha" =~ ^0*$ ]]; then
+            echo "pre-push: warning: the remote main is unknown here, so v$new is NOT being released." >&2
+            echo "          Publish it later with scripts/publish-release.sh if needed." >&2
+            return 0
+        fi
+        if ! previous="$(git show "$remote_sha:VERSION" 2>/dev/null | tr -d '[:space:]')" || [[ -z "$previous" ]]; then
+            echo "pre-push: warning: cannot read VERSION at the remote's main (${remote_sha:0:8}), so v$new is NOT being released." >&2
+            return 0
+        fi
+        if [[ "$new" == "$previous" ]]; then
+            return 0
+        fi
+        latest="$previous"
     fi
 
-    # The build uses the working tree, so it must be exactly the commit being pushed.
-    if [[ "$(git rev-parse HEAD)" != "$sha" || -n "$(git status --porcelain --untracked-files=no)" ]]; then
+    # The build uses the working tree (SwiftPM also compiles untracked .swift files), so it must be
+    # exactly the commit being pushed. Ignored paths (build/, .build/, ...) don't count.
+    if [[ "$(git rev-parse HEAD)" != "$sha" || -n "$(git status --porcelain --untracked-files=normal)" ]]; then
         echo "pre-push: v$new needs a release build, but the working tree is not a clean checkout of ${sha:0:8}." >&2
         echo "          Check out and clean that commit, then push again." >&2
         return 1
     fi
 
-    echo "pre-push: building v$new (latest release: ${latest:-none})"
+    echo "pre-push: building v$new (previous release: ${latest:-none})"
     if ! scripts/build-app.sh --version "$new" </dev/null; then
         echo "Release build failed: push stopped so v$new never reaches main without its release." >&2
         return 1
@@ -53,15 +99,15 @@ release_for() {
         return 1
     fi
 
-    nohup scripts/publish-release.sh "$new" "$sha" >> build/release/publish.log 2>&1 </dev/null &
+    nohup scripts/publish-release.sh "$new" "$sha" "$REMOTE_NAME" >> build/release/publish.log 2>&1 </dev/null &
     disown 2>/dev/null || true
     echo "pre-push: v$new built; release will be published after the push lands (log: build/release/publish.log)"
 }
 
 for entry in ${refs[@]+"${refs[@]}"}; do
-    read -r _ local_sha remote_ref _ <<<"$entry"
+    read -r _ local_sha remote_ref remote_sha <<<"$entry"
     [[ "$remote_ref" == "refs/heads/main" ]] || continue
     [[ "$local_sha" =~ ^0+$ ]] && continue   # deleting main: nothing to release
-    release_for "$local_sha" || exit 1
+    release_for "$local_sha" "$remote_sha" || exit 1
 done
 exit 0
