@@ -115,7 +115,8 @@ final class AppModel {
     // MARK: Settings and helper
 
     func setPaused(_ paused: Bool) {
-        var updated = settings
+        // Start from the file, not from `settings`: the CLI may have changed it since the last reload.
+        var updated = SettingsStore(paths: paths).load()
         updated.paused = paused
         saveSettings(updated)
     }

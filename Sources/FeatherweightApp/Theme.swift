@@ -12,6 +12,13 @@ enum Theme {
     })
     static let green = Color(red: 0.188, green: 0.820, blue: 0.345)
     static let cardRadius: CGFloat = 10
+
+    /// A colour that is `light` in the light appearance and `dark` in the dark one.
+    static func adaptive(light: NSColor, dark: NSColor) -> Color {
+        Color(nsColor: NSColor(name: nil) { appearance in
+            appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? dark : light
+        })
+    }
 }
 
 extension JobKind {
@@ -151,6 +158,15 @@ enum DateText {
         }
         if age < 6 * 86_400 { return formatter("EEE", calendar).string(from: date) }
         return formatter("dMMM", calendar).string(from: date)
+    }
+
+    /// For tables: "2 hours ago", "5 days ago", "1 month ago".
+    static func ago(_ date: Date, now: Date = Date()) -> String {
+        if now.timeIntervalSince(date) < 60 { return "Just now" }
+        let relative = RelativeDateTimeFormatter()
+        relative.unitsStyle = .full
+        relative.dateTimeStyle = .numeric
+        return relative.localizedString(for: date, relativeTo: now)
     }
 
     /// "daily at 3:00 AM", "Sundays at 3:00 AM".

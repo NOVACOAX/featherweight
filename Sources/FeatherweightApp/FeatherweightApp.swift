@@ -31,8 +31,12 @@ struct MainWindow: View {
     @Bindable var model: AppModel
     @State private var selection: SidebarItem?
 
-    init(model: AppModel, selection: SidebarItem = .overview) {
+    private let initialProject: String?
+
+    /// `project` is the row to start with selected (for the snapshot mode).
+    init(model: AppModel, selection: SidebarItem = .overview, project: String? = nil) {
         self.model = model
+        initialProject = project
         _selection = State(initialValue: selection)
     }
 
@@ -40,13 +44,23 @@ struct MainWindow: View {
         NavigationSplitView {
             SidebarView(model: model, selection: $selection)
         } detail: {
-            switch selection ?? .overview {
-            case .overview: OverviewView(model: model)
-            case .projects: ProjectsPlaceholder(count: model.projects.count)
-            case .activity: ActivityView(model: model)
+            Group {
+                switch selection ?? .overview {
+                case .overview: OverviewView(model: model)
+                case .projects: ProjectsView(model: model, initialSelection: initialProject)
+                case .activity: ActivityView(model: model)
+                }
+            }
+            // A problem shows above whichever screen is open.
+            .safeAreaInset(edge: .top, spacing: 0) {
+                if let notice = model.notice {
+                    NoticeBanner(text: notice) { model.notice = nil }
+                        .padding(.horizontal, 26)
+                        .padding(.vertical, 10)
+                }
             }
         }
-        .frame(minWidth: 820, minHeight: 540)
+        .frame(minWidth: 900, minHeight: 540)
         .sheet(item: $model.previewResult) { result in
             PreviewSheet(result: result, activityWindowHours: model.settings.activityWindowHours) {
                 model.previewResult = nil
@@ -56,17 +70,5 @@ struct MainWindow: View {
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             model.reload()
         }
-    }
-}
-
-/// Stands in until the Projects screen exists.
-private struct ProjectsPlaceholder: View {
-    let count: Int
-
-    var body: some View {
-        ContentUnavailableView(
-            "Projects", systemImage: "folder",
-            description: Text("\(count) \(count == 1 ? "project" : "projects") found."))
-            .navigationTitle("Projects")
     }
 }

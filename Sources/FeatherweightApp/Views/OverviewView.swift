@@ -10,7 +10,6 @@ struct OverviewView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
-                if let notice = model.notice { NoticeBanner(text: notice) { model.notice = nil } }
                 hero
                 jobCards
                 recentActivity
@@ -26,7 +25,8 @@ struct OverviewView: View {
 
     private var hero: some View {
         HStack(alignment: .bottom, spacing: 32) {
-            HStack(alignment: .lastTextBaseline, spacing: 32) {
+            // Top-aligned, so the two labels share a line whatever size the numbers are.
+            HStack(alignment: .top, spacing: 32) {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 4) {
                     Text("Saving now").sectionLabel()
@@ -44,10 +44,11 @@ struct OverviewView: View {
                             .padding(14)
                     }
                 }
+                .frame(height: 18)
                 BigBytes(bytes: model.savings?.sharedBytes ?? 0)
             }
             VStack(alignment: .leading, spacing: 8) {
-                Text("Caches cleared this month").sectionLabel()
+                Text("Caches cleared this month").sectionLabel().frame(height: 18)
                 BigBytes(bytes: model.cachesClearedThisMonth, size: 28)
             }
             }
