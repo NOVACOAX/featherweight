@@ -89,4 +89,78 @@ import Testing
         #expect(debouncer.due(now: t0.addingTimeInterval(10)).map(\.path) == ["/dev/a", "/dev/proj"])
         #expect(debouncer.due(now: t0.addingTimeInterval(15)).map(\.path) == ["/dev/a/functions"])
     }
+
+    @Test func debouncerIgnoresNodeModulesCacheFolders() {
+        var debouncer = InstallDebouncer(excludedRelativePaths: ["node_modules/.cache", "node_modules/.vite"])
+        for (offset, path) in [
+            "/dev/proj/node_modules/.cache/babel/x.json", "/dev/proj/node_modules/.vite/deps/react.js",
+            "/dev/proj/node_modules/.cache", "/dev/a/functions/node_modules/.cache/y",
+        ].enumerated() {
+            debouncer.record(path: path, eventID: 10 + UInt64(offset), at: t0, ignoreAtOrBelow: 0, projects: projects)
+        }
+        #expect(debouncer.nextDue == nil)
+
+        // A sibling whose name only starts with an excluded folder's name still counts.
+        debouncer.record(path: "/dev/proj/node_modules/.cachex/z", eventID: 20, at: t0, ignoreAtOrBelow: 0, projects: projects)
+        #expect(debouncer.due(now: t0.addingTimeInterval(60)).map(\.path) == ["/dev/proj"])
+    }
+
+    @Test func excludedPathsComeFromSettings() {
+        let folders = [
+            CacheFolderSetting(relativePath: ".next", enabled: true, isBuiltIn: true),
+            CacheFolderSetting(relativePath: "node_modules/.cache", enabled: true, isBuiltIn: true),
+            CacheFolderSetting(relativePath: "node_modules/.astro", enabled: false, isBuiltIn: false),
+        ]
+        #expect(InstallDebouncer.excludedRelativePaths(cacheFolders: folders)
+            == ["node_modules/.astro", "node_modules/.cache", "node_modules/.vite"])
+    }
+
+    @Test func debouncerForgetsOtherJobsEventsInItsProjects() throws {
+        let tree = try TempTree(["dev/proj/package.json": "{}", "dev/a/package.json": "{}"])
+        defer { tree.remove() }
+        let mine = [tree.url("dev/proj").path, tree.url("dev/a").path].map {
+            Project(
+                root: URL(fileURLWithPath: $0, isDirectory: true), parentRoot: nil, packageManager: .npm,
+                nodeModules: URL(fileURLWithPath: $0 + "/node_modules", isDirectory: true))
+        }
+        var debouncer = InstallDebouncer()
+        debouncer.record(path: tree.url("dev/proj/node_modules/x").path, eventID: 100, at: t0, ignoreAtOrBelow: 0, projects: mine)
+        debouncer.record(path: tree.url("dev/a/node_modules/x").path, eventID: 101, at: t0, ignoreAtOrBelow: 0, projects: mine)
+
+        // A job that covered only "proj" ended with its history event at 120. Its record names the
+        // project through a different spelling of the same folder (/var vs /private/var).
+        let spelled = tree.url("dev/proj").path.replacingOccurrences(of: "/private/var/", with: "/var/")
+        debouncer.forget(atOrBelow: 120, inProjects: [spelled])
+        #expect(debouncer.due(now: t0.addingTimeInterval(60)).map(\.lastPathComponent) == ["a"])
+
+        // Entries with a later event survive.
+        debouncer.record(path: tree.url("dev/proj/node_modules/y").path, eventID: 130, at: t0, ignoreAtOrBelow: 0, projects: mine)
+        debouncer.forget(atOrBelow: 120, inProjects: [tree.url("dev/proj").path])
+        #expect(debouncer.due(now: t0.addingTimeInterval(60)).map(\.lastPathComponent) == ["proj"])
+    }
+
+    @Test func debouncerDroppedEventsMarkProjectsUnderPath() {
+        var debouncer = InstallDebouncer()
+        // MustScanSubDirs for a folder holding projects: every project at or under it.
+        debouncer.recordDroppedEvents(under: "/dev/a", eventID: 10, at: t0, ignoreAtOrBelow: 0, projects: projects)
+        #expect(debouncer.due(now: t0.addingTimeInterval(60)).map(\.path) == ["/dev/a", "/dev/a/functions"])
+
+        // For a folder inside a project's node_modules: that project.
+        debouncer.recordDroppedEvents(
+            under: "/dev/proj/node_modules/react", eventID: 11, at: t0, ignoreAtOrBelow: 0, projects: projects)
+        #expect(debouncer.due(now: t0.addingTimeInterval(60)).map(\.path) == ["/dev/proj"])
+
+        // Global drop: every project. Own events are still ignored.
+        debouncer.recordDroppedEvents(under: nil, eventID: 12, at: t0, ignoreAtOrBelow: 12, projects: projects)
+        #expect(debouncer.nextDue == nil)
+        debouncer.recordDroppedEvents(under: nil, eventID: 13, at: t0, ignoreAtOrBelow: 12, projects: projects)
+        #expect(debouncer.due(now: t0.addingTimeInterval(60)).count == 3)
+    }
+
+    @Test func ignoreThresholdIsClampedToCurrentEventID() {
+        #expect(InstallDebouncer.ignoreThreshold(lastEventIDs: [], currentEventID: 500) == 0)
+        #expect(InstallDebouncer.ignoreThreshold(lastEventIDs: [100, 300, 200], currentEventID: 500) == 300)
+        // History from another Mac or before an event-database reset must not silence new events.
+        #expect(InstallDebouncer.ignoreThreshold(lastEventIDs: [100, 9_000_000], currentEventID: 500) == 500)
+    }
 }

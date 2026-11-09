@@ -58,11 +58,12 @@ public struct LaunchAgent: Sendable {
         }
     }
 
-    /// Unloads the helper (ignoring failure, for example when it is not loaded) and removes the plist.
+    /// Unloads the helper (ignoring failure, for example when it is not loaded), then removes the
+    /// plist and the helper's pid file.
     public func uninstall() throws {
         bootout()
-        if FileManager.default.fileExists(atPath: plistURL.path) {
-            try FileManager.default.removeItem(at: plistURL)
+        for url in [plistURL, paths.helperPID] where FileManager.default.fileExists(atPath: url.path) {
+            try FileManager.default.removeItem(at: url)
         }
     }
 

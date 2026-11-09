@@ -1,30 +1,20 @@
 import FeatherweightCore
 import Foundation
+import os
 
-enum HelperPaths {
-    /// `AppPaths.standard`, unless `FEATHERWEIGHT_STATE_DIR` names a folder to keep all state in
-    /// (development and testing only). With that override the "home" is the same folder, so the
-    /// default project folder (`~/Developer`) is never picked up by accident.
-    static func resolve() -> AppPaths {
-        guard let override = ProcessInfo.processInfo.environment["FEATHERWEIGHT_STATE_DIR"],
-              !override.isEmpty
-        else { return .standard }
-        let base = URL(fileURLWithPath: override, isDirectory: true)
-        return AppPaths(
-            base: base, launchAgentsDir: base.appendingPathComponent("LaunchAgents", isDirectory: true),
-            home: base)
-    }
-}
-
+/// The helper's log, in the unified log (launchd discards a LaunchAgent's stderr). Read it with
+/// `log show --predicate 'subsystem == "com.novacoax.featherweight.helper"'`.
 enum HelperLog {
+    private static let logger = Logger(subsystem: "com.novacoax.featherweight.helper", category: "helper")
+
     static func line(_ text: String) {
-        FileHandle.standardError.write(Data("featherweight-helper: \(text)\n".utf8))
+        logger.log("\(text, privacy: .public)")
     }
 }
 
 // No AppKit. FSEvents, the timer, the state-directory source and power notifications are all
 // scheduled on the main queue, which the main run loop drains on the main thread (`dispatchMain()`
 // would park the main thread and run main-queue blocks elsewhere, breaking @MainActor).
-let service = HelperService(paths: HelperPaths.resolve())
+let service = HelperService(paths: AppPaths.resolved(environment: ProcessInfo.processInfo.environment))
 service.start()
 RunLoop.main.run()

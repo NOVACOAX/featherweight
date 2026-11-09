@@ -7,21 +7,6 @@ enum Output {
     }
 }
 
-enum CLIPaths {
-    /// `AppPaths.standard`, unless `FEATHERWEIGHT_STATE_DIR` names a folder to keep all state in
-    /// (used for testing the CLI). With that override the "home" is the same folder, so the
-    /// default project folder (`~/Developer`) is never picked up by accident.
-    static func resolve() -> AppPaths {
-        guard let override = ProcessInfo.processInfo.environment["FEATHERWEIGHT_STATE_DIR"],
-              !override.isEmpty
-        else { return .standard }
-        let base = URL(fileURLWithPath: override, isDirectory: true)
-        return AppPaths(
-            base: base, launchAgentsDir: base.appendingPathComponent("LaunchAgents", isDirectory: true),
-            home: base)
-    }
-}
-
 struct Commands {
     static let usage = """
         Usage: featherweight <command>

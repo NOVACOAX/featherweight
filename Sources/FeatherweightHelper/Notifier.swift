@@ -24,7 +24,9 @@ final class Notifier {
 
     func post(_ text: NotificationText) {
         guard let center else {
-            HelperLog.line("notification: \(text.title): \(text.body)")
+            let line = "notification: \(text.title): \(text.body)"
+            HelperLog.line(line)
+            FileHandle.standardError.write(Data("featherweight-helper: \(line)\n".utf8))
             return
         }
         let content = UNMutableNotificationContent()

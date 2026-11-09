@@ -95,10 +95,13 @@ private final class RecordingRunner: CommandRunner, @unchecked Sendable {
         let runner = RecordingRunner(failBootout: true)
         let agent = LaunchAgent(paths: paths, runner: runner)
 
+        try HelperHeartbeat(paths: paths).write(pid: 12345)
+
         try agent.uninstall()
 
         #expect(runner.commands == [["/bin/launchctl", "bootout", "gui/\(getuid())/\(label)"]])
         #expect(!agent.isInstalled())
+        #expect(!FileManager.default.fileExists(atPath: paths.helperPID.path))
         // Uninstalling again is harmless.
         try agent.uninstall()
     }

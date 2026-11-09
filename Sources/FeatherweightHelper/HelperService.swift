@@ -13,6 +13,8 @@ final class HelperService {
     private static let rescanInterval: TimeInterval = 60
     /// How long after a job to wait for its `history.jsonl` event before treating events as new.
     private static let fenceTimeout: TimeInterval = 30
+    /// How long to keep another process's record waiting for its `history.jsonl` event.
+    private static let unfencedLifetime: TimeInterval = 300
 
     private let paths: AppPaths
     private let history: HistoryStore
@@ -36,6 +38,11 @@ final class HelperService {
     /// or the ID of the latest `history.jsonl` event (written when a job ends), whichever is higher.
     private var ignoreAtOrBelow: UInt64 = 0
     private var seenRecords: Set<UUID> = []
+    /// Records read from history whose `history.jsonl` event the stream has not delivered yet.
+    /// Another process's job (the CLI, the app) renames files after its `lastFSEventID` too, and
+    /// those events can reach the debouncer before its history event; when that event arrives,
+    /// pending projects the job worked on with no later event are dropped (Review Focus 2).
+    private var unfencedRecords: [RunRecord] = []
     /// Physical path of `history.jsonl`, as FSEvents reports it.
     private var historyEventPath = ""
 
@@ -74,10 +81,12 @@ final class HelperService {
         }
         notifier.requestAuthorization()
         settings = SettingsStore(paths: paths).load()
+        debouncer.excludedRelativePaths = InstallDebouncer.excludedRelativePaths(cacheFolders: settings.cacheFolders)
         readHistory(notify: false)
         rescanProjects()
         watchStateDirectory()
-        historyEventPath = Self.physicalPath(paths.base.path) + "/" + paths.history.lastPathComponent
+        historyEventPath = (PhysicalPath.resolve(paths.base.path) ?? paths.base.path) + "/"
+            + paths.history.lastPathComponent
         watcher.watch(watchedFolders)
         startTimer()
         wakeWatcher.start()
@@ -98,14 +107,23 @@ final class HelperService {
         let now = Date()
         if let fence = pendingFence, now >= fence.deadline { pendingFence = nil }
         var unknownProject = false
+        var historyEventID: UInt64?
         for event in events {
             if event.path == historyEventPath {
                 // A job just ended: every event before this one is at or below its end.
+                historyEventID = event.id
                 ignoreAtOrBelow = max(ignoreAtOrBelow, event.id)
                 if jobsInFlight == 0, let fence = pendingFence, event.id > fence.above { pendingFence = nil }
                 continue
             }
             if isBusy, event.id > busySinceEventID { continue }
+            if event.isGlobalDrop || event.mustScanSubDirs {
+                // Events were lost, so any project there may have been installed into.
+                debouncer.recordDroppedEvents(
+                    under: event.isGlobalDrop ? nil : event.path, eventID: event.id, at: now,
+                    ignoreAtOrBelow: ignoreAtOrBelow, projects: projects)
+                continue
+            }
             debouncer.record(
                 path: event.path, eventID: event.id, at: now, ignoreAtOrBelow: ignoreAtOrBelow,
                 projects: projects)
@@ -114,10 +132,25 @@ final class HelperService {
                 unknownProject = true
             }
         }
+        if let historyEventID { fence(atHistoryEvent: historyEventID, now: now) }
         if unknownProject, lastRescan.map({ now.timeIntervalSince($0) >= Self.rescanInterval }) ?? true {
             rescanProjects()
         }
         reschedule()
+    }
+
+    /// The stream delivered a `history.jsonl` append with ID `eventID`: every record finished before
+    /// it is now fenced, so drop pending projects those jobs worked on with no later event (their
+    /// own renames, numbered after the record's `lastFSEventID` but before this event).
+    private func fence(atHistoryEvent eventID: UInt64, now: Date) {
+        readHistory(notify: true)
+        unfencedRecords.removeAll { record in
+            if record.lastFSEventID < eventID {
+                debouncer.forget(atOrBelow: eventID, inProjects: record.projects)
+                return true
+            }
+            return now.timeIntervalSince(record.finishedAt) > Self.unfencedLifetime
+        }
     }
 
     /// "/dev/app" for "/dev/app/node_modules/x"; nil when the path is not in a `node_modules`.
@@ -157,6 +190,7 @@ final class HelperService {
     private func stateDirectoryChanged() {
         let old = settings
         settings = SettingsStore(paths: paths).load()
+        debouncer.excludedRelativePaths = InstallDebouncer.excludedRelativePaths(cacheFolders: settings.cacheFolders)
         if settings.projectFolders != old.projectFolders {
             watcher.watch(watchedFolders)
         }
@@ -170,14 +204,20 @@ final class HelperService {
         reschedule()
     }
 
-    /// Raises `ignoreAtOrBelow` to the newest job's event ID and, with `notify`, queues runs other
-    /// processes recorded (the CLI) for notification. The helper's own runs are queued when they
-    /// finish, with their project names.
+    /// Raises `ignoreAtOrBelow` to the newest job's event ID (never above the current event ID)
+    /// and, with `notify` (after startup), tracks new records until their history event arrives and
+    /// queues runs other processes recorded (the CLI) for notification. The helper's own runs are
+    /// queued when they finish, with their project names.
     private func readHistory(notify: Bool) {
         let records = history.all()
-        ignoreAtOrBelow = max(ignoreAtOrBelow, records.map(\.lastFSEventID).max() ?? 0)
+        ignoreAtOrBelow = max(
+            ignoreAtOrBelow,
+            InstallDebouncer.ignoreThreshold(
+                lastEventIDs: records.map(\.lastFSEventID), currentEventID: FSEventsGetCurrentEventId()))
         for record in records.reversed() where seenRecords.insert(record.id).inserted {
-            if notify, record.trigger != .scheduled, record.trigger != .afterInstall {
+            guard notify else { continue }
+            unfencedRecords.append(record)
+            if record.trigger != .scheduled, record.trigger != .afterInstall {
                 composer.add(record, projectName: nil)
             }
         }
@@ -192,7 +232,7 @@ final class HelperService {
             let excluded = Set(settings.cacheFolders.map(\.relativePath).filter { !$0.contains("/") })
             let found = ProjectScanner(excludedDirectoryNames: excluded)
                 .scan(folders: settings.projectFolders.map { URL(fileURLWithPath: $0, isDirectory: true) })
-            let roots = found.map { Self.physicalPath($0.root.path) }
+            let roots = found.map { PhysicalPath.resolve($0.root.path) ?? $0.root.path }
             let matchable = zip(found, roots).map { project, root in
                 var project = project
                 project.nodeModules = URL(fileURLWithPath: root + "/node_modules", isDirectory: true)
@@ -205,13 +245,6 @@ final class HelperService {
                 }
             }
         }
-    }
-
-    /// `path` with symlinks resolved (FSEvents reports physical paths), or unchanged if it fails.
-    private nonisolated static func physicalPath(_ path: String) -> String {
-        guard let resolved = realpath(path, nil) else { return path }
-        defer { free(resolved) }
-        return String(cString: resolved)
     }
 
     // MARK: Jobs
@@ -237,10 +270,15 @@ final class HelperService {
         if !isBusy { busySinceEventID = FSEventsGetCurrentEventId() }
         jobsInFlight += 1
         let jobs = jobs
+        let paths = paths
         jobQueue.async { [weak self] in
             let errors: [String]
             let record: RunRecord?
-            if kind == .clean {
+            if SettingsStore(paths: paths).load().paused {
+                // Paused after this job was queued: skip it, but still report back so the
+                // in-flight bookkeeping unwinds.
+                (errors, record) = (["paused"], nil)
+            } else if kind == .clean {
                 let result = jobs.clean(trigger: trigger, only: roots, dryRun: false)
                 (errors, record) = (result.0.errors, result.1)
             } else {

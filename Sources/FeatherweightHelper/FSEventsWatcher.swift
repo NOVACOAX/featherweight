@@ -4,6 +4,15 @@ import Foundation
 struct FileEvent: Sendable {
     let path: String
     let id: UInt64
+    let flags: FSEventStreamEventFlags
+
+    /// The system dropped events below `path` and the folder must be rescanned.
+    var mustScanSubDirs: Bool { flags & FSEventStreamEventFlags(kFSEventStreamEventFlagMustScanSubDirs) != 0 }
+
+    /// The system dropped events anywhere (user- or kernel-side buffer overflow).
+    var isGlobalDrop: Bool {
+        flags & FSEventStreamEventFlags(kFSEventStreamEventFlagUserDropped | kFSEventStreamEventFlagKernelDropped) != 0
+    }
 }
 
 /// One `FSEventStream` with file-level events over a set of folders, delivered on the main queue
@@ -55,7 +64,7 @@ final class FSEventsWatcher {
         handler(events)
     }
 
-    private static let callback: FSEventStreamCallback = { _, info, count, eventPaths, _, eventIDs in
+    private static let callback: FSEventStreamCallback = { _, info, count, eventPaths, eventFlags, eventIDs in
         guard let info else { return }
         let watcher = Unmanaged<FSEventsWatcher>.fromOpaque(info).takeUnretainedValue()
         // With kFSEventStreamCreateFlagUseCFTypes the paths arrive as a CFArray of CFString.
@@ -63,7 +72,7 @@ final class FSEventsWatcher {
         var events: [FileEvent] = []
         events.reserveCapacity(count)
         for index in 0..<min(count, paths.count) {
-            events.append(FileEvent(path: paths[index], id: eventIDs[index]))
+            events.append(FileEvent(path: paths[index], id: eventIDs[index], flags: eventFlags[index]))
         }
         // The stream is scheduled on the main queue, so this runs on the main thread.
         MainActor.assumeIsolated { watcher.deliver(events) }

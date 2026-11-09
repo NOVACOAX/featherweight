@@ -24,6 +24,18 @@ public struct AppPaths: Sendable {
         )
     }()
 
+    /// `standard`, unless the environment's `FEATHERWEIGHT_STATE_DIR` names a folder to keep all
+    /// state in (development and testing of the CLI and helper only). With that override the
+    /// "home" is the same folder, so the default project folder (`~/Developer`) is never picked up
+    /// by accident.
+    public static func resolved(environment: [String: String]) -> AppPaths {
+        guard let override = environment["FEATHERWEIGHT_STATE_DIR"], !override.isEmpty else { return .standard }
+        let base = URL(fileURLWithPath: override, isDirectory: true)
+        return AppPaths(
+            base: base, launchAgentsDir: base.appendingPathComponent("LaunchAgents", isDirectory: true),
+            home: base)
+    }
+
     public var settings: URL { base.appendingPathComponent("settings.json") }
     public var history: URL { base.appendingPathComponent("history.jsonl") }
     public var stats: URL { base.appendingPathComponent("stats.json") }
