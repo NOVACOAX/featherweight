@@ -9,10 +9,35 @@ struct FeatherweightApp: App {
 
     var body: some Scene {
         WindowGroup("Featherweight") {
-            MainWindow(model: model)
+            RootView(model: model)
                 .tint(Theme.amber)
         }
         .defaultSize(width: 980, height: 640)
+
+        Settings {
+            SettingsView(model: model)
+                .tint(Theme.amber)
+        }
+    }
+}
+
+/// The first launch screen until the user has started, the main window after.
+struct RootView: View {
+    let model: AppModel
+
+    var body: some View {
+        Group {
+            if model.settings.onboardingComplete {
+                MainWindow(model: model)
+            } else {
+                OnboardingView(model: model)
+                    .frame(minWidth: 560, minHeight: 540)
+            }
+        }
+        .task {
+            model.startWatching()
+            await model.checkForUpdateIfDue()
+        }
     }
 }
 

@@ -10,7 +10,7 @@ import SwiftUI
 /// It refuses to run without `FEATHERWEIGHT_STATE_DIR`, so it can never read or change the real
 /// state directory. It also runs real jobs (a dry run of each, then a real dedupe) against that
 /// directory's settings; set `FEATHERWEIGHT_SNAPSHOT_ONLY` to a comma-separated list of screens
-/// (`overview`, `projects`, `activity`) to draw just those and run no jobs at all.
+/// (`overview`, `projects`, `activity`, `settings`, `onboarding`) to draw just those and run no jobs at all.
 @MainActor
 enum SnapshotMode {
     static func runIfRequested() {
@@ -56,6 +56,30 @@ enum SnapshotMode {
             snapshot(MainWindow(model: model, selection: .projects, project: selectedProject).tint(Theme.amber), size: size, dark: false,
                      to: directory.appendingPathComponent("projects-notice-light.png"))
             model.notice = nil
+        }
+        if only?.contains("settings") ?? true {
+            // The first pop-up buttons drawn in a process come out empty, so draw light twice.
+            for dark in [false, false, true] {
+                await snapshotWaiting(SettingsView(model: model).tint(Theme.amber).background(.background), size: nil, dark: dark, seconds: 1,
+                         to: directory.appendingPathComponent("settings-\(dark ? "dark" : "light").png"))
+            }
+            // What the "Add folder name…" popover says about names it refuses.
+            for name in ["../escape", ".git", ".next"] {
+                do { _ = try CacheFolderSetting.custom(named: name, existing: model.settings.cacheFolders) }
+                catch { print("custom cache folder \"\(name)\": \(error.localizedDescription)") }
+            }
+        }
+        if only?.contains("onboarding") ?? true {
+            // The estimate is computed by the view itself (dry runs in the background); give it time.
+            let started = Date()
+            let paths = model.paths
+            let found = await Task.detached { FirstLaunchEstimate.compute(paths: paths) }.value
+            print("first launch estimate: \(found) in \(Date().timeIntervalSince(started)) s")
+            for dark in [false, true] {
+                await snapshotWaiting(OnboardingView(model: model).tint(Theme.amber).background(.background),
+                         size: CGSize(width: 560, height: 560), dark: dark, seconds: 1.5,
+                         to: directory.appendingPathComponent("onboarding-\(dark ? "dark" : "light").png"))
+            }
         }
         if only != nil { return }
 
@@ -106,7 +130,26 @@ enum SnapshotMode {
     }
 
     /// Draws `view` in an off-screen window. With no `size` the view is drawn at its own size.
-    private static func snapshot<V: View>(_ view: V, size: CGSize?, dark: Bool, to url: URL) {
+    private static func snapshot<V: View>(
+        _ view: V, size: CGSize?, dark: Bool, settle: TimeInterval = 0.6, to url: URL
+    ) {
+        let (window, host) = present(view, size: size, dark: dark)
+        // Let SwiftUI finish its layout passes.
+        RunLoop.main.run(until: Date().addingTimeInterval(settle))
+        capture(window, host, to: url)
+    }
+
+    /// Like `snapshot`, but waits by suspending, so the view's own `.task` (which needs the main
+    /// actor) can run and finish before the picture is taken.
+    private static func snapshotWaiting<V: View>(
+        _ view: V, size: CGSize?, dark: Bool, seconds: Double, to url: URL
+    ) async {
+        let (window, host) = present(view, size: size, dark: dark)
+        try? await Task.sleep(for: .seconds(seconds))
+        capture(window, host, to: url)
+    }
+
+    private static func present<V: View>(_ view: V, size: CGSize?, dark: Bool) -> (NSWindow, NSHostingView<V>) {
         let host = NSHostingView(rootView: view)
         let frame = size.map { NSRect(origin: .zero, size: $0) } ?? NSRect(origin: .zero, size: host.fittingSize)
         let window = NSWindow(
@@ -117,14 +160,20 @@ enum SnapshotMode {
         window.setFrame(window.frameRect(forContentRect: frame), display: true)
         window.orderBack(nil)
         host.layoutSubtreeIfNeeded()
-        // Let SwiftUI finish its layout passes.
-        RunLoop.main.run(until: Date().addingTimeInterval(0.6))
+        return (window, host)
+    }
+
+    private static func capture<V: View>(_ window: NSWindow, _ host: NSHostingView<V>, to url: URL) {
+        window.displayIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+        window.displayIfNeeded()
         host.layoutSubtreeIfNeeded()
         let target = window.contentView?.superview ?? host
-        guard let bitmap = target.bitmapImageRepForCachingDisplay(in: target.bounds) else { return }
-        target.cacheDisplay(in: target.bounds, to: bitmap)
-        if let png = bitmap.representation(using: .png, properties: [:]) {
-            try? png.write(to: url)
+        if let bitmap = target.bitmapImageRepForCachingDisplay(in: target.bounds) {
+            target.cacheDisplay(in: target.bounds, to: bitmap)
+            if let png = bitmap.representation(using: .png, properties: [:]) {
+                try? png.write(to: url)
+            }
         }
         window.orderOut(nil)
     }

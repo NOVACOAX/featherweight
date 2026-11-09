@@ -39,6 +39,7 @@ public struct AppPaths: Sendable {
     public var settings: URL { base.appendingPathComponent("settings.json") }
     public var history: URL { base.appendingPathComponent("history.jsonl") }
     public var stats: URL { base.appendingPathComponent("stats.json") }
+    public var appState: URL { base.appendingPathComponent("state.json") }
     public var projects: URL { base.appendingPathComponent("projects.json") }
     public var hashCache: URL { base.appendingPathComponent("hashes.sqlite") }
     public var jobLock: URL { base.appendingPathComponent("jobs.lock") }

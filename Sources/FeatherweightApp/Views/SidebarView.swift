@@ -73,6 +73,11 @@ private struct SidebarFooter: View {
                 .tint(Theme.amber)
                 .font(.system(size: 12))
                 .foregroundStyle(.secondary)
+
+            if model.settings.checkForUpdates, let update = model.availableUpdate {
+                Link("Version \(update.version) is available", destination: update.url)
+                    .font(.system(size: 12))
+            }
         }
         .padding(.horizontal, 16)
         .padding(.bottom, 12)

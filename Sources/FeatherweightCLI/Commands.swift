@@ -18,7 +18,7 @@ struct Commands {
           projects            List projects and their sizes
           pause | resume      Pause or resume scheduled jobs
           log [--limit N]     Show recent runs (default 20)
-          uninstall           Remove Featherweight's background helper
+          uninstall           Remove the background helper and the terminal command
           version             Print the version
           help                Print this help
         """
@@ -34,9 +34,7 @@ struct Commands {
         case .pause: return setPaused(true)
         case .resume: return setPaused(false)
         case .log(let limit): return log(limit: limit)
-        case .uninstall:
-            print("Featherweight's background helper is not installed.")
-            return 0
+        case .uninstall: return uninstall()
         case .version:
             print("featherweight \(AppVersion.current)")
             return 0
@@ -44,6 +42,32 @@ struct Commands {
             print(Self.usage)
             return 0
         }
+    }
+
+    // MARK: uninstall
+
+    /// Unloads and removes the LaunchAgent, then removes the `featherweight` links in the folders
+    /// the app installs them to. Featherweight's own data stays where it is.
+    private func uninstall() -> Int32 {
+        // launchctl is called by absolute path, so the plain environment is enough here.
+        let agent = LaunchAgent(paths: paths, runner: ProcessCommandRunner(environment: ProcessInfo.processInfo.environment))
+        let installer = CLIInstaller(
+            home: paths.home, pathEnv: ProcessInfo.processInfo.environment["PATH"] ?? "")
+        let helperWasInstalled = agent.isInstalled()
+        let links = installer.installedLinks()
+        do {
+            try agent.uninstall()
+            try installer.uninstall()
+        } catch {
+            Output.error("Could not uninstall: \(error.localizedDescription)")
+            return 1
+        }
+        if helperWasInstalled { print("Removed Featherweight's background helper.") }
+        for link in links { print("Removed the featherweight command from \(link.deletingLastPathComponent().path).") }
+        if !helperWasInstalled, links.isEmpty {
+            print("Featherweight's background helper is not installed.")
+        }
+        return 0
     }
 
     // MARK: status
