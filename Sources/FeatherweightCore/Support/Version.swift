@@ -1,13 +1,18 @@
 import Foundation
 
 public enum AppVersion {
-    /// `CFBundleShortVersionString` of the `.app` enclosing this executable (found by resolving
-    /// symlinks on `CommandLine.arguments[0]`), or "dev" when not running from inside an app.
+    /// `CFBundleShortVersionString` of the `.app` enclosing this executable, or "dev" when not
+    /// running from inside an app. The real executable path is tried first (so a bare
+    /// `featherweight` found through PATH still works); `CommandLine.arguments[0]` is only a fallback.
     public static var current: String {
-        guard let executable = CommandLine.arguments.first else { return "dev" }
-        return version(ofAppEnclosing: URL(fileURLWithPath: executable)) ?? "dev"
+        let candidates = [Bundle.main.executablePath, CommandLine.arguments.first].compactMap { $0 }
+        for path in candidates {
+            if let version = version(ofAppEnclosing: URL(fileURLWithPath: path)) { return version }
+        }
+        return "dev"
     }
 
+    /// Resolves symlinks on `executable`, then walks up to the enclosing `.app`.
     static func version(ofAppEnclosing executable: URL) -> String? {
         var directory = executable.resolvingSymlinksInPath().deletingLastPathComponent()
         while directory.path != "/" {

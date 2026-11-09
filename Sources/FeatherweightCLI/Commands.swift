@@ -106,8 +106,9 @@ struct Commands {
 
     private func dedupe(dryRun: Bool) -> Int32 {
         guard hasProjectFolders() else { return 0 }
-        let (report, _) = JobRunner(paths: paths).dedupe(
+        let (report, record) = JobRunner(paths: paths).dedupe(
             trigger: .manualCLI, dryRun: dryRun, onWaiting: Self.announceWaiting)
+        if !dryRun, record == nil { return finish(errors: report.errors, didNotRun: true) }
         print("Scanned \(report.filesScanned) files, "
             + "\(dryRun ? "would replace" : "replaced") \(report.filesReplaced) duplicates")
         print(freedLine(report.bytesFreed, dryRun: dryRun))
@@ -117,8 +118,9 @@ struct Commands {
     private func clean(dryRun: Bool) -> Int32 {
         guard hasProjectFolders() else { return 0 }
         let settings = SettingsStore(paths: paths).load()
-        let (report, _) = JobRunner(paths: paths).clean(
+        let (report, record) = JobRunner(paths: paths).clean(
             trigger: .manualCLI, dryRun: dryRun, onWaiting: Self.announceWaiting)
+        if !dryRun, record == nil { return finish(errors: report.errors, didNotRun: true) }
         for candidate in report.cleared {
             print("\(dryRun ? "Would clear" : "Cleared") \(Self.label(candidate)) "
                 + "(\(ByteFormat.string(candidate.allocatedBytes)))")
@@ -145,10 +147,10 @@ struct Commands {
         fflush(stdout)
     }
 
-    /// Prints each error to stderr; returns 1 if there were any.
-    private func finish(errors: [String]) -> Int32 {
+    /// Prints each error to stderr; returns 1 if there were any (or if the job never ran).
+    private func finish(errors: [String], didNotRun: Bool = false) -> Int32 {
         errors.forEach(Output.error)
-        return errors.isEmpty ? 0 : 1
+        return errors.isEmpty && !didNotRun ? 0 : 1
     }
 
     /// False (after printing a hint) when no projects folders are configured.

@@ -14,21 +14,21 @@ struct AppVersionTests {
     @Test func readsVersionFromEnclosingApp() throws {
         let tree = try TempTree([
             "Featherweight.app/Contents/Info.plist": Self.plist,
-            "Featherweight.app/Contents/Resources/featherweight": "",
+            "Featherweight.app/Contents/Helpers/featherweight": "",
         ])
-        let executable = tree.url("Featherweight.app/Contents/Resources/featherweight")
+        let executable = tree.url("Featherweight.app/Contents/Helpers/featherweight")
         #expect(AppVersion.version(ofAppEnclosing: executable) == "1.2.3")
     }
 
     @Test func followsSymlinkIntoApp() throws {
         let tree = try TempTree([
             "Featherweight.app/Contents/Info.plist": Self.plist,
-            "Featherweight.app/Contents/Resources/featherweight": "",
+            "Featherweight.app/Contents/Helpers/featherweight": "",
             "bin/": "",
         ])
         let link = tree.url("bin/featherweight")
         try FileManager.default.createSymbolicLink(
-            at: link, withDestinationURL: tree.url("Featherweight.app/Contents/Resources/featherweight"))
+            at: link, withDestinationURL: tree.url("Featherweight.app/Contents/Helpers/featherweight"))
         #expect(AppVersion.version(ofAppEnclosing: link) == "1.2.3")
     }
 
