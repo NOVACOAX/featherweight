@@ -36,6 +36,7 @@ struct RootView: View {
         }
         .task {
             model.startWatching()
+            await model.reinstallHelperIfMoved()
             await model.checkForUpdateIfDue()
         }
     }

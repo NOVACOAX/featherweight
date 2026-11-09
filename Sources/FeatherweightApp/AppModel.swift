@@ -169,23 +169,51 @@ final class AppModel {
 
     /// Installs and loads the LaunchAgent that runs the helper.
     func startHelper() async {
-        if let failure = await installHelper() { notice = "Could not start the helper: \(failure)" }
+        if let failure = await installHelper() { notice = failure }
     }
 
-    /// Installs the LaunchAgent; returns what went wrong, if anything.
+    /// Installs the LaunchAgent; returns the message to show if it was not installed, or nil.
+    /// An app still running from a translocated copy is asked to move first: the agent would
+    /// point at a path that disappears.
     private func installHelper() async -> String? {
-        let paths = paths
         let helper = HelperLocator.helperExecutable()
+        if HelperInstallPolicy.atFirstInstall(helperPath: helper.path) == .askToMove {
+            return HelperInstallPolicy.moveNotice
+        }
+        return await runInstall(helper: helper)
+    }
+
+    private func runInstall(helper: URL) async -> String? {
+        let paths = paths
         let failure: String? = await Task.detached {
             do {
                 try LaunchAgent(paths: paths, runner: ProcessCommandRunner()).install(helperExecutable: helper)
                 return nil
             } catch {
-                return error.localizedDescription
+                return "Could not start the helper: \(error.localizedDescription)"
             }
         }.value
         reload()
         return failure
+    }
+
+    @ObservationIgnored private var checkedHelperLocation = false
+
+    /// On launch, installs the LaunchAgent again if it points at a different helper than this
+    /// app's (the app was moved). Checked once per run.
+    func reinstallHelperIfMoved() async {
+        guard !checkedHelperLocation else { return }
+        checkedHelperLocation = true
+        let helper = HelperLocator.helperExecutable()
+        let paths = paths
+        let installedPath = await Task.detached { LaunchAgent(paths: paths, runner: ProcessCommandRunner()).installedHelperPath() }.value
+        switch HelperInstallPolicy.atLaunch(
+            onboardingComplete: settings.onboardingComplete, installedPath: installedPath, helperPath: helper.path)
+        {
+        case .skip: break
+        case .askToMove: notice = HelperInstallPolicy.moveNotice
+        case .install: if let failure = await runInstall(helper: helper) { notice = failure }
+        }
     }
 
     /// The "Run in background when I log in" switch: installs or removes the LaunchAgent.
@@ -309,7 +337,7 @@ final class AppModel {
         // Each job clears the notice when it starts, so collect what goes wrong in each run
         // and show it all at the end.
         var problems: [String] = []
-        if let failure = await installHelper() { problems.append("Could not start the helper: \(failure)") }
+        if let failure = await installHelper() { problems.append(failure) }
         if let problem = await runDedupe(preview: false, trigger: .firstLaunch) { problems.append(problem) }
         if let problem = await runClean(preview: false, trigger: .firstLaunch) { problems.append(problem) }
         notice = problems.isEmpty ? nil : problems.joined(separator: "\n")

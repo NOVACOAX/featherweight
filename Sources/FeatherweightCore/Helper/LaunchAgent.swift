@@ -80,14 +80,6 @@ public struct LaunchAgent: Sendable {
         return (plist["ProgramArguments"] as? [String])?.first
     }
 
-    /// True when the agent is installed but launches a different helper than `helperExecutable`
-    /// (the app was moved or replaced), so the app should install it again. A missing agent is
-    /// left alone: the user may have switched it off.
-    public func needsReinstall(helperExecutable: URL) -> Bool {
-        guard let installed = installedHelperPath() else { return false }
-        return installed != helperExecutable.path
-    }
-
     private func bootout() {
         _ = try? runner.run(Self.launchctl, ["bootout", "\(domain)/\(Self.label)"], in: nil)
     }

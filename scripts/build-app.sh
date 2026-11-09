@@ -6,13 +6,21 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
+USAGE="usage: scripts/build-app.sh [--version X.Y.Z]"
 VERSION="$(tr -d '[:space:]' < VERSION)"
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --version) VERSION="${2:?--version needs a value}"; shift 2 ;;
-        *) echo "unknown argument: $1" >&2; exit 2 ;;
+        --version)
+            if [[ $# -lt 2 ]]; then
+                echo "error: --version needs a value" >&2; echo "$USAGE" >&2; exit 2
+            fi
+            VERSION="$2"; shift 2 ;;
+        *) echo "error: unknown argument: $1" >&2; echo "$USAGE" >&2; exit 2 ;;
     esac
 done
+if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    echo "error: version \"$VERSION\" is not X.Y.Z (digits only)" >&2; echo "$USAGE" >&2; exit 2
+fi
 
 APP="build/Featherweight.app"
 CONTENTS="$APP/Contents"
@@ -58,14 +66,15 @@ cp "$CONTENTS/Resources/AppIcon.icns" "$HELPER_CONTENTS/Resources/AppIcon.icns"
 rm -rf "$(dirname "$ICONSET")"
 
 echo "==> Signing"
-if security find-certificate -c "Featherweight Self-Signed" >/dev/null 2>&1; then
+if security find-identity -v -p codesigning | grep -q "Featherweight Self-Signed"; then
     IDENTITY="Featherweight Self-Signed"
 else
     IDENTITY="-"
     echo "warning: no \"Featherweight Self-Signed\" certificate found; signing ad-hoc." >&2
     echo "         Ad-hoc builds work, but macOS may ask for permissions again after each update." >&2
 fi
-codesign --force --timestamp=none --sign "$IDENTITY" "$CONTENTS/Helpers/featherweight"
+codesign --force --timestamp=none --sign "$IDENTITY" --identifier com.novacoax.featherweight.cli \
+    "$CONTENTS/Helpers/featherweight"
 codesign --force --timestamp=none --sign "$IDENTITY" "$HELPER_APP"
 codesign --force --timestamp=none --sign "$IDENTITY" "$APP"
 

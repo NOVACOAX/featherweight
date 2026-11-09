@@ -106,31 +106,16 @@ private final class RecordingRunner: CommandRunner, @unchecked Sendable {
         try agent.uninstall()
     }
 
-    @Test func needsReinstallWhenTheInstalledPathDiffers() throws {
+    @Test func readsTheInstalledHelperPath() throws {
         let (tree, paths) = try fixture()
         defer { tree.remove() }
         let agent = LaunchAgent(paths: paths, runner: RecordingRunner())
-        try agent.install(helperExecutable: helper)
-
-        #expect(agent.installedHelperPath() == helper.path)
-        #expect(!agent.needsReinstall(helperExecutable: helper))
-        // The app was moved: the same agent now points at a path that no longer exists.
-        let moved = URL(fileURLWithPath: "/Users/me/Downloads/Featherweight.app/Contents/Library/LoginItems/Featherweight Helper.app/Contents/MacOS/FeatherweightHelper")
-        #expect(agent.needsReinstall(helperExecutable: moved))
-    }
-
-    @Test func neverReinstallsWhenNothingIsInstalledOrThePlistIsUnreadable() throws {
-        let (tree, paths) = try fixture()
-        defer { tree.remove() }
-        let agent = LaunchAgent(paths: paths, runner: RecordingRunner())
-
-        // Not installed: the user turned it off (or never turned it on), so the app leaves it alone.
         #expect(agent.installedHelperPath() == nil)
-        #expect(!agent.needsReinstall(helperExecutable: helper))
 
-        try FileManager.default.createDirectory(at: paths.launchAgentsDir, withIntermediateDirectories: true)
+        try agent.install(helperExecutable: helper)
+        #expect(agent.installedHelperPath() == helper.path)
+
         try Data("not a plist".utf8).write(to: agent.plistURL)
         #expect(agent.installedHelperPath() == nil)
-        #expect(!agent.needsReinstall(helperExecutable: helper))
     }
 }
