@@ -134,7 +134,7 @@ import Testing
             return CommandResult(exitCode: 0, stdout: "", stderr: "")
         }
         _ = try GitClient(runner: runner).push(repoRoot: URL(fileURLWithPath: "/tmp"))
-        #expect(seen.all == ["/usr/bin/env GIT_TERMINAL_PROMPT=0 /usr/bin/git push"])
+        #expect(seen.all == ["/usr/bin/env LC_ALL=C GIT_TERMINAL_PROMPT=0 /usr/bin/git push"])
     }
 
     @Test func findRepoRootDistinguishesNotARepoFromGitErrors() throws {
@@ -151,6 +151,41 @@ import Testing
         }
         // The best-effort wrapper still answers nil.
         #expect(GitClient(runner: broken).repoRoot(for: URL(fileURLWithPath: "/tmp")) == nil)
+    }
+
+    @Test func everyGitCallRunsWithLocaleForcedToC() throws {
+        let seen = CallLog()
+        let runner = FakeRunner { command, args in
+            seen.append(([command] + args).joined(separator: " "))
+            return CommandResult(exitCode: 0, stdout: "/tmp\n", stderr: "")
+        }
+        let client = GitClient(runner: runner)
+        let dir = URL(fileURLWithPath: "/tmp")
+        _ = try client.findRepoRoot(for: dir)
+        _ = try client.checkTracked(dir.appendingPathComponent("x"), repoRoot: dir)
+        _ = client.currentBranch(dir)
+        _ = client.upstream(dir)
+        _ = client.remoteURL(dir, remote: "origin")
+        try client.commit(files: ["a"], message: "m", repoRoot: dir)
+        _ = try client.push(repoRoot: dir)
+        #expect(seen.all.count >= 8)
+        for call in seen.all {
+            #expect(call.hasPrefix("/usr/bin/env LC_ALL=C /usr/bin/git ") || call.hasPrefix("/usr/bin/env LC_ALL=C GIT_TERMINAL_PROMPT=0 /usr/bin/git "), "\(call)")
+        }
+    }
+
+    @Test func notARepositoryIsDetectedUnderNonEnglishParentLocale() throws {
+        let tree = try TempTree(["a.txt": "1"])
+        defer { tree.remove() }
+        // The parent environment asks for German; the client must still get English messages.
+        let runner = ProcessCommandRunner(environment: [
+            "PATH": "/usr/bin:/bin", "HOME": NSTemporaryDirectory(),
+            "LANG": "de_DE.UTF-8", "LC_ALL": "de_DE.UTF-8", "LANGUAGE": "de",
+            "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_CEILING_DIRECTORIES": tree.root.deletingLastPathComponent().path,
+        ])
+        let client = GitClient(runner: runner)
+        #expect(try client.findRepoRoot(for: tree.root) == nil)
     }
 
     @Test func checkTrackedThrowsOnGitFailure() throws {

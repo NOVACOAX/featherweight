@@ -6,11 +6,12 @@ public enum GitError: Error, Equatable {
     case invalidPathspec(String)
 }
 
-/// Thin wrapper over `/usr/bin/git`. Every call passes paths as separate arguments (never through
+/// Thin wrapper over `/usr/bin/git` (run as `env LC_ALL=C git ...`). Every call passes paths as separate arguments (never through
 /// a shell) and puts `--` before pathspecs. Pathspecs are literal, so names containing glob
 /// characters or spaces mean exactly what they say.
 public struct GitClient: Sendable {
     private static let git = "/usr/bin/git"
+    private static let env = "/usr/bin/env"
 
     private let runner: CommandRunner
 
@@ -35,7 +36,7 @@ public struct GitClient: Sendable {
     /// repository. Any other failure (git missing, "dubious ownership", a locked index) throws.
     public func findRepoRoot(for directory: URL) throws -> URL? {
         let args = ["rev-parse", "--show-toplevel"]
-        let result = try runner.run(Self.git, args, in: directory)
+        let result = try exec(args, in: directory)
         if !result.succeeded {
             if result.exitCode == 128 && result.stderr.contains("not a git repository") { return nil }
             throw Self.failure(args, result)
@@ -55,7 +56,7 @@ public struct GitClient: Sendable {
             throw GitError.invalidPathspec(path.path)
         }
         let args = ["--literal-pathspecs", "ls-files", "-z", "--", relative]
-        let result = try runner.run(Self.git, args, in: repoRoot)
+        let result = try exec(args, in: repoRoot)
         guard result.succeeded else { throw Self.failure(args, result) }
         return !result.stdout.isEmpty
     }
@@ -89,14 +90,24 @@ public struct GitClient: Sendable {
     /// `GIT_TERMINAL_PROMPT=0` makes git fail instead of waiting for a credential prompt; it is
     /// set through `env` because the runner's environment is fixed when it is created.
     public func push(repoRoot: URL) throws -> CommandResult {
-        try runner.run("/usr/bin/env", ["GIT_TERMINAL_PROMPT=0", Self.git, "push"], in: repoRoot)
+        try exec(["push"], in: repoRoot, extraEnvironment: ["GIT_TERMINAL_PROMPT=0"])
     }
 
     // MARK: - Helpers
 
+    /// Runs git through `/usr/bin/env` so each call gets its own environment (the runner's is
+    /// fixed when it is created). `LC_ALL=C` keeps git's messages in English, which the
+    /// "not a git repository" check depends on, whatever the user's locale.
+    private func exec(
+        _ args: [String], in directory: URL, extraEnvironment: [String] = []
+    ) throws -> CommandResult {
+        try runner.run(
+            Self.env, ["LC_ALL=C"] + extraEnvironment + [Self.git] + args, in: directory)
+    }
+
     /// Trimmed-of-newline stdout of a successful, non-empty command; nil otherwise.
     private func output(_ args: [String], in directory: URL) -> String? {
-        guard let result = try? runner.run(Self.git, args, in: directory), result.succeeded else {
+        guard let result = try? exec(args, in: directory), result.succeeded else {
             return nil
         }
         // Trim only line endings: a path may legitimately end in a space.
@@ -105,7 +116,7 @@ public struct GitClient: Sendable {
     }
 
     private func runChecked(_ args: [String], in directory: URL) throws {
-        let result = try runner.run(Self.git, args, in: directory)
+        let result = try exec(args, in: directory)
         guard result.succeeded else { throw Self.failure(args, result) }
     }
 
