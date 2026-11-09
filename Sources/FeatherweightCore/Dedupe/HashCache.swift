@@ -41,6 +41,8 @@ public final class HashCache: @unchecked Sendable {
         do {
             sqlite3_busy_timeout(handle, Self.busyTimeoutMillis)
             try exec("PRAGMA journal_mode=WAL")
+            // Safe for a cache under WAL: a crash may lose recent rows, never corrupt the file.
+            try exec("PRAGMA synchronous=NORMAL")
             try exec("""
                 CREATE TABLE IF NOT EXISTS hashes(
                     path TEXT PRIMARY KEY,
@@ -81,6 +83,8 @@ public final class HashCache: @unchecked Sendable {
     }
 
     /// Deletes every entry whose path does not start with one of `prefixes`.
+    /// Prefixes are raw string prefixes, so callers should include the trailing "/"
+    /// (otherwise "/a/b" also keeps "/a/b2/...").
     public func prune(keepingPathsWithPrefixes prefixes: [String]) throws {
         lock.lock()
         defer { lock.unlock() }
@@ -106,8 +110,17 @@ public final class HashCache: @unchecked Sendable {
         let handle = try FileHandle(forReadingFrom: url)
         defer { try? handle.close() }
         var hasher = SHA256()
-        while let chunk = try handle.read(upToCount: chunkSize), !chunk.isEmpty {
-            hasher.update(data: chunk)
+        // Each chunk is autoreleased by Foundation; drain per iteration so a large file does not
+        // accumulate in memory.
+        var reachedEnd = false
+        while !reachedEnd {
+            try autoreleasepool {
+                guard let chunk = try handle.read(upToCount: chunkSize), !chunk.isEmpty else {
+                    reachedEnd = true
+                    return
+                }
+                hasher.update(data: chunk)
+            }
         }
         return Data(hasher.finalize())
     }

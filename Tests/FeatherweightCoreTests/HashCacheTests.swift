@@ -57,6 +57,53 @@ import Testing
         #expect(second == Data(SHA256.hash(data: Data("two".utf8))))
     }
 
+    @Test func sizeChangeAloneRecomputes() throws {
+        let tree = try TempTree(["a.txt": "one"])
+        defer { tree.remove() }
+        let mtime = Date(timeIntervalSince1970: 1_000_000)
+        try tree.setMTime("a.txt", to: mtime)
+        let cache = try makeCache(tree)
+        let url = tree.url("a.txt")
+        let first = try cache.digest(for: url, info: CloneFS.info(at: url))
+
+        // Same inode, same mtime, different size.
+        let handle = try FileHandle(forWritingTo: url)
+        try handle.truncate(atOffset: 0)
+        try handle.write(contentsOf: Data("three!".utf8))
+        try handle.close()
+        try tree.setMTime("a.txt", to: mtime)
+        let info = try CloneFS.info(at: url)
+        #expect(info.size == 6)
+        let second = try cache.digest(for: url, info: info)
+
+        #expect(cache.hashesComputed == 2)
+        #expect(first != second)
+    }
+
+    @Test func inodeChangeAloneRecomputes() throws {
+        let tree = try TempTree(["a.txt": "aaaa", "staging/new.txt": "bbbb"])
+        defer { tree.remove() }
+        let mtime = Date(timeIntervalSince1970: 1_000_000)
+        try tree.setMTime("a.txt", to: mtime)
+        try tree.setMTime("staging/new.txt", to: mtime)
+        let cache = try makeCache(tree)
+        let url = tree.url("a.txt")
+        let before = try CloneFS.info(at: url)
+        let first = try cache.digest(for: url, info: before)
+
+        // Replace by rename: same path, size and mtime, new inode.
+        _ = try FileManager.default.replaceItemAt(url, withItemAt: tree.url("staging/new.txt"))
+        try tree.setMTime("a.txt", to: mtime)
+        let after = try CloneFS.info(at: url)
+        #expect(after.inode != before.inode)
+        #expect(after.size == before.size)
+        #expect(after.mtimeNanos == before.mtimeNanos)
+        let second = try cache.digest(for: url, info: after)
+
+        #expect(cache.hashesComputed == 2)
+        #expect(first != second)
+    }
+
     @Test func persistsAcrossInstances() throws {
         let tree = try TempTree(["a.txt": "persist"])
         defer { tree.remove() }
