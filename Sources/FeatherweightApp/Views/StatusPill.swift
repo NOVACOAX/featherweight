@@ -13,24 +13,11 @@ extension ProjectSummary {
         case info
     }
 
-    /// Why the cleaner skips this project, or nil if it does not. The statuses are the ones
-    /// `ProjectSummary.status` produces; the reasons use the same wording as the Preview sheet.
-    func skipReason(activityWindowHours: Int) -> String? {
-        switch status {
-        case "Skipped: active": SkipReason.recentlyActive.displayText(activityWindowHours: activityWindowHours)
-        case "Tracked in git": SkipReason.trackedInGit.displayText(activityWindowHours: activityWindowHours)
-        case "Git unavailable": SkipReason.gitUnavailable.displayText(activityWindowHours: activityWindowHours)
-        case "Skipped": "A cache folder changed during cleanup or contains a git repository"
-        default: nil
-        }
-    }
-
+    /// A pnpm project reads "Linked by pnpm" whatever else holds its caches back.
     var statusTone: StatusTone {
-        switch status {
-        case "Skipped: active", "Tracked in git", "Git unavailable", "Skipped": .skipped
-        case _ where status.hasSuffix(" kept"): .info
-        default: .good
-        }
+        if packageManager == .pnpm { return .good }
+        if skipReason != nil { return .skipped }
+        return status.hasSuffix(" kept") ? .info : .good
     }
 }
 

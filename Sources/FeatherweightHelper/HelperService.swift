@@ -229,8 +229,7 @@ final class HelperService {
         lastRescan = Date()
         let settings = settings
         scanQueue.async { [weak self] in
-            let excluded = Set(settings.cacheFolders.map(\.relativePath).filter { !$0.contains("/") })
-            let found = ProjectScanner(excludedDirectoryNames: excluded)
+            let found = ProjectScanner(excludedDirectoryNames: ProjectScanner.excludedNames(for: settings))
                 .scan(folders: settings.projectFolders.map { URL(fileURLWithPath: $0, isDirectory: true) })
             let roots = found.map { PhysicalPath.resolve($0.root.path) ?? $0.root.path }
             let matchable = zip(found, roots).map { project, root in

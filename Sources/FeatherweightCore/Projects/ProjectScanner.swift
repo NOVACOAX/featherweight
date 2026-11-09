@@ -8,6 +8,20 @@ import Foundation
 public struct ProjectScanner: Sendable {
     public let excludedDirectoryNames: Set<String>
 
+    /// Folders that tools generate deploy and framework output into. A `package.json` in there
+    /// belongs to the output, not to a project. (Skipped for discovery only: whether their
+    /// contents may be cleared is up to the cache folder settings.)
+    public static let generatedOutputDirectories: Set<String> = [
+        ".vercel", ".netlify", ".svelte-kit", ".wrangler", ".firebase", ".expo",
+    ]
+
+    /// Directory names to skip when scanning for `settings`: cache folder names without a "/" (so
+    /// their contents are not mistaken for projects) and the generated output folders.
+    public static func excludedNames(for settings: Settings) -> Set<String> {
+        Set(settings.cacheFolders.map(\.relativePath).filter { !$0.contains("/") })
+            .union(generatedOutputDirectories)
+    }
+
     public init(excludedDirectoryNames: Set<String>) {
         self.excludedDirectoryNames = excludedDirectoryNames
     }

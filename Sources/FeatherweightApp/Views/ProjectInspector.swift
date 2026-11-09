@@ -37,14 +37,14 @@ struct ProjectInspector: View {
     private var gitLine: String? {
         var parts: [String] = []
         if let branch = project.gitBranch { parts.append("git: \(branch)") }
-        if let remote = project.remoteURL.flatMap(RemoteText.hostAndPath) { parts.append(remote) }
+        if let remote = project.remoteURL.flatMap(RemoteURL.hostAndPath) { parts.append(remote) }
         return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 
     // MARK: Actions
 
     private var actions: some View {
-        let skipReason = project.skipReason(activityWindowHours: model.settings.activityWindowHours)
+        let skipReason = project.skipReason?.displayText(activityWindowHours: model.settings.activityWindowHours)
         let busy = model.runningJob != nil
         return HStack(spacing: 8) {
             Button("Show in Finder") {
@@ -64,34 +64,5 @@ struct ProjectInspector: View {
             }
         }
         .fixedSize()
-    }
-}
-
-/// Turns a git remote into what people recognise, without any credentials.
-enum RemoteText {
-    /// "https://user:token@github.com/org/repo.git" -> "github.com/org/repo";
-    /// "git@github.com:org/repo.git" -> "github.com/org/repo"; a local path stays a path.
-    static func hostAndPath(_ remote: String) -> String? {
-        var text = remote.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return nil }
-
-        if let scheme = text.range(of: "://") {
-            // scheme://[user[:password]@]host[:port]/path
-            let rest = text[scheme.upperBound...]
-            let authorityEnd = rest.firstIndex(of: "/") ?? rest.endIndex
-            let authority = rest[..<authorityEnd]
-            let host = authority.split(separator: "@", omittingEmptySubsequences: false).last.map(String.init) ?? ""
-            text = host + rest[authorityEnd...]
-        } else if let colon = text.firstIndex(of: ":"), !text[..<colon].contains("/") {
-            // scp-style: [user@]host:path
-            let host = text[..<colon].split(separator: "@", omittingEmptySubsequences: false).last.map(String.init) ?? ""
-            var path = String(text[text.index(after: colon)...])
-            if path.hasPrefix("/") { path.removeFirst() }
-            text = host + "/" + path
-        }
-
-        while text.hasSuffix("/") { text.removeLast() }
-        if text.hasSuffix(".git") { text.removeLast(4) }
-        return text.isEmpty ? nil : text
     }
 }

@@ -57,3 +57,36 @@ import Testing
         #expect(SkipReason.containsRepository.displayText(activityWindowHours: 24) == "Contains a git repository")
     }
 }
+
+@Suite struct ProjectSummarySkipReasonTests {
+    private func candidate(_ skip: SkipReason?) -> CacheCandidate {
+        CacheCandidate(projectRoot: "/p", folder: "/p/.next", relativePath: ".next", allocatedBytes: 1, skip: skip)
+    }
+
+    @Test func blockingSkipFollowsTheStatusPrecedenceAndIgnoresTurnedOffFolders() {
+        #expect(ProjectSummary.blockingSkip([]) == nil)
+        #expect(ProjectSummary.blockingSkip([candidate(nil), candidate(.notEnabled)]) == nil)
+        #expect(ProjectSummary.blockingSkip([candidate(.trackedInGit), candidate(.recentlyActive)]) == .recentlyActive)
+        #expect(ProjectSummary.blockingSkip([candidate(.gitUnavailable), candidate(.trackedInGit)]) == .trackedInGit)
+        #expect(ProjectSummary.blockingSkip([candidate(.containsRepository)]) == .containsRepository)
+    }
+
+    @Test func olderProjectsFilesWithoutASkipReasonStillLoad() throws {
+        let json = """
+        [{"id":"/p","name":"p","packageManager":"npm","nodeModulesBytes":1,"sharedBytes":0,
+          "cacheBytes":0,"status":"Skipped: active"}]
+        """
+        let loaded = try JSONDecoder().decode([ProjectSummary].self, from: Data(json.utf8))
+        #expect(loaded.first?.skipReason == nil)
+        #expect(loaded.first?.status == "Skipped: active")
+    }
+
+    @Test func skipReasonRoundTrips() throws {
+        let summary = ProjectSummary(
+            id: "/p", name: "p", parentRoot: nil, packageManager: .pnpm, nodeModulesBytes: 1, sharedBytes: 0,
+            cacheBytes: 0, lastActive: nil, status: "Linked by pnpm", gitBranch: nil, upstream: nil,
+            remoteURL: nil, skipReason: .recentlyActive)
+        let decoded = try JSONDecoder().decode(ProjectSummary.self, from: JSONEncoder().encode(summary))
+        #expect(decoded.skipReason == .recentlyActive)
+    }
+}

@@ -121,10 +121,7 @@ public final class JobRunner: @unchecked Sendable {
 
     private func loadContext(only: [URL]? = nil) -> Context {
         let settings = SettingsStore(paths: paths).load()
-        // Cache folder names without a "/" are skipped while scanning, so their contents are not
-        // mistaken for projects.
-        let excluded = Set(settings.cacheFolders.map(\.relativePath).filter { !$0.contains("/") })
-        let all = ProjectScanner(excludedDirectoryNames: excluded)
+        let all = ProjectScanner(excludedDirectoryNames: ProjectScanner.excludedNames(for: settings))
             .scan(folders: settings.projectFolders.map { URL(fileURLWithPath: $0, isDirectory: true) })
         var run = all
         if let only {
@@ -215,7 +212,9 @@ public final class JobRunner: @unchecked Sendable {
                     clearedByLastClean: cleared, clearedBytes: clearedBytes[root]),
                 gitBranch: repo.flatMap(git.currentBranch),
                 upstream: repo.flatMap(git.upstream),
-                remoteURL: repo.flatMap { git.remoteURL($0, remote: "origin") })
+                // Never store credentials that may be embedded in the URL.
+                remoteURL: repo.flatMap { git.remoteURL($0, remote: "origin") }.map(RemoteURL.withoutCredentials),
+                skipReason: ProjectSummary.blockingSkip(candidates))
         }
         return (summaries, write(summaries, to: paths.projects))
     }

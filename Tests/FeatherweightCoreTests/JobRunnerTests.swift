@@ -150,6 +150,44 @@ private struct RunnerFixture {
         #expect(summaries.map(\.name) == ["a", "b"])
     }
 
+    @Test func generatedDeployOutputIsNotScannedAsProjects() throws {
+        let f = try RunnerFixture(extraFiles: [
+            "projects/a/.vercel/output/functions/__nitro.func/package.json": "{}",
+            "projects/a/.netlify/functions-internal/package.json": "{}",
+            "projects/b/.svelte-kit/output/package.json": "{}",
+            "projects/b/.wrangler/tmp/package.json": "{}",
+            "projects/b/.firebase/hosting/package.json": "{}",
+            "projects/b/.expo/web/package.json": "{}",
+        ])
+        defer { f.tree.remove() }
+
+        _ = f.runner.refreshSummaries()
+
+        let summaries = try f.readJSON([ProjectSummary].self, f.paths.projects)
+        #expect(summaries.map(\.name) == ["a", "b"])
+    }
+
+    @Test func summariesNeverStoreRemoteCredentialsAndRecordTheSkipReason() throws {
+        let f = try RunnerFixture()
+        defer { f.tree.remove() }
+        let a = f.projectURL("a")
+        try GitFixture.initRepo(a)
+        try GitFixture.git(["remote", "add", "origin", "https://user:ghp_secrettoken@github.com/org/repo.git"], in: a)
+        // Recently active, so the cleaner would skip its caches.
+        try FileManager.default.createDirectory(at: a.appendingPathComponent(".next"), withIntermediateDirectories: true)
+        try Data("x".utf8).write(to: a.appendingPathComponent("src.js"))
+
+        _ = f.runner.refreshSummaries()
+
+        let raw = try String(contentsOf: f.paths.projects, encoding: .utf8)
+        #expect(!raw.contains("ghp_secrettoken"))
+        #expect(!raw.contains("user:"))
+        let summary = try #require(f.readJSON([ProjectSummary].self, f.paths.projects).first { $0.name == "a" })
+        #expect(summary.remoteURL == "https://github.com/org/repo.git")
+        #expect(summary.skipReason == .recentlyActive)
+        #expect(summary.status == "Skipped: active")
+    }
+
     @Test func nonDryRunWaitsForTheLockAndReportsWaiting() throws {
         let f = try RunnerFixture()
         defer { f.tree.remove() }

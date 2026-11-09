@@ -17,12 +17,17 @@ public struct ProjectSummary: Codable, Sendable, Identifiable {
     public let status: String
     public let gitBranch: String?
     public let upstream: String?
+    /// The git remote without any credentials (see `RemoteURL.withoutCredentials`).
     public let remoteURL: String?
+    /// Why the cleaner leaves this project's caches alone, if it does. Unlike `status`, this is set
+    /// for pnpm projects too. Missing in `projects.json` files written by older versions.
+    public let skipReason: SkipReason?
 
     public init(
         id: String, name: String, parentRoot: String?, packageManager: PackageManager,
         nodeModulesBytes: Int64, sharedBytes: Int64, cacheBytes: Int64, lastActive: Date?,
-        status: String, gitBranch: String?, upstream: String?, remoteURL: String?
+        status: String, gitBranch: String?, upstream: String?, remoteURL: String?,
+        skipReason: SkipReason? = nil
     ) {
         self.id = id
         self.name = name
@@ -36,6 +41,15 @@ public struct ProjectSummary: Codable, Sendable, Identifiable {
         self.gitBranch = gitBranch
         self.upstream = upstream
         self.remoteURL = remoteURL
+        self.skipReason = skipReason
+    }
+
+    /// The reason that stops a project's caches being cleared, by the same precedence `status` uses
+    /// (a folder that is merely turned off in Settings is not a reason).
+    static func blockingSkip(_ candidates: [CacheCandidate]) -> SkipReason? {
+        let reasons = Set(candidates.compactMap(\.skip))
+        return [SkipReason.recentlyActive, .trackedInGit, .gitUnavailable, .pathChanged, .containsRepository]
+            .first(where: reasons.contains)
     }
 
     /// The single place that turns a project's state into its status string.
