@@ -75,7 +75,7 @@ struct Commands {
         print(jobLine("Dedupe", kind: .dedupe, schedule: settings.dedupeSchedule, settings, history, now))
         print(jobLine("Clean", kind: .clean, schedule: settings.cleanSchedule, settings, history, now))
         print("Paused: \(settings.paused ? "yes" : "no")")
-        print("Helper: unknown")
+        print("Helper: \(HelperHeartbeat(paths: paths).isAlive() ? "running" : "not running")")
         return 0
     }
 
