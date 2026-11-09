@@ -1,0 +1,96 @@
+# Featherweight build: decisions and deferred items
+
+Every decision Claude made on Hugh's behalf while building the plan, in the order made, each with what it costs if wrong. Then the small issues reviewers found and left for later. Source: the build ledger, ended 2026-11-09.
+
+## Decisions
+
+- ## Rulings
+- - Ruling: T8 `status` prints helper state as "unknown" until T9; T9 updates CLI status to use HelperHeartbeat.isAlive() — order conflict — cost if wrong: one extra small edit in T9.
+- - Ruling: T10 omits `availableUpdate`; T12 adds it to AppModel along with AvailableUpdate — order conflict — cost: none.
+- - Ruling: T10 adds `HelperLocator` in FeatherweightApp with `helperExecutable()` / `cliExecutable()`: inside a .app → bundle paths per T16 layout (Contents/Library/LoginItems/Featherweight Helper.app/Contents/MacOS/FeatherweightHelper, Contents/Helpers/featherweight); otherwise the sibling executable next to the running binary (swift run). T16 then needs no AppModel change — cost: small path tweak in T16 if layout changes.
+- - Ruling: ProjectScanner exclusions passed by callers = every cacheFolders relativePath without "/" (enabled or not) — keeps cache dirs from being scanned as projects — cost: none.
+- - Ruling: views/scripts tasks (T11, T15–T18) verified manually per plan; reviewers judge against the manual checks — plan-mandated, spec allows — cost: UI regressions caught only at manual check.
+- - Ruling: work on branch featherweight-v1 in place (repo has no other work; no worktree) — cost: none.
+- Task 2: Ruling: promote reviewer Minor "inconsistent root URL form (trailing slash vs not)" into fix round 1 — Project is Hashable and Tasks 5/7/9 do path-prefix matching on roots — cost if wrong: a few extra lines now.
+- Task 3: implementer DONE_WITH_CONCERNS at d73b60d. Ruling: CloneFS.privateBytes counts only regular files with linkCount == 1 — a hardlinked file (pnpm store) frees nothing when deleted, and Task 13 measures pnpm conversion savings with it — cost if wrong: slight under-count when two links both live inside the folder.
+- Task 3: Ruling: lchown-before-chmod ordering accepted (final mode/owner as spec'd); BSD flags & birthtime not carried over — accepted, uchg duplicates fail safely — cost: a locked file stays duplicated.
+- Task 3: Ruling: promote Minor "hardlinked/same-inode duplicate accepted" into fix round — defense in depth for file-replacing code; Deduper also filters — cost: none.
+- Task 3: Ruling: resolve ⚠️ decmpfs risk by refusing keepers/duplicates with UF_COMPRESSED (throw, skip) — copyfile xattr replacement could strip com.apple.decmpfs; npm-written files are rarely compressed — cost: compressed duplicates stay unshared.
+- Task 4: Ruling: promote Minor "inode/size halves of staleness key untested" and "PRAGMA synchronous=NORMAL" into fix round — stale digest is the named safety risk; per-file fsync breaks the light-work budget — cost: a few lines.
+- Task 5: Ruling: keep background QoS (which throttles disk I/O on macOS) and drop explicit setiopolicy_np — implementer probed that on macOS 27 the two conflict (iopolicy disables QoS) — cost if wrong: one-line switch in Support/BackgroundWork.swift.
+- Task 5: Ruling: changed-during-replace (keeper or duplicate) skipped quietly like refusals — expected during installs, not user-facing errors — cost: such skips invisible in history.
+- Task 6: Ruling: promote Minors "re-check activity right before each removal", "push sets GIT_TERMINAL_PROMPT=0", "commit rejects ./../absolute pathspecs" into fix round — all are safety properties of deleting/staging — cost: a few lines.
+- Task 6: Ruling: relativePath validation also rejects exactly ".git" and "node_modules" (never caches) — cost: user can't clear whole node_modules via custom entry (non-goal anyway).
+- Task 6: Ruling: promote re-review Minors "broken-gitfile message treated as not-a-repo", "empty rev-parse stdout → nil", "locale test depends on /tmp/x existing" and out-of-scope "cache folder inside a nested repo/submodule, or containing .git" into round 2 — all fail-open deletion paths — cost: refusing some nested-repo caches.
+- Task 6: Ruling: promote "external volume non-repo always gitUnavailable" (set GIT_DISCOVERY_ACROSS_FILESYSTEM=1 or accept mount-point message) and "scan enumerator without errorHandler" (fail closed) into round 3 — cost: small.
+- Task 6: Ruling: supersede round-2 ruling — discovery runs with GIT_DISCOVERY_ACROSS_FILESYSTEM=1 (mount-point match kept as backstop); depth cap / non-ancestor root throws (fail closed); exec clears GIT_CEILING_DIRECTORIES and GIT_DIR/GIT_WORK_TREE from the inherited env — cost: slightly more git work on external volumes.
+- Task 7: Ruling: JobRunner.withLock changes from `rethrows` to `throws` and throws when the lock can't be held; dedupe/clean return the report with an error and nil record (job not run) on lock failure — plan signature changed because spec's one-job-at-a-time rule outranks it — cost: callers add `try`.
+- Task 7: Ruling: promote Minors "isOverdue 1s early + DST regression test", "1 projects pluralisation", "raw enum names in skipped" into fix round — user-visible/correctness — cost: small.
+- Task 8: Ruling: ByteFormat allowsNonnumericFormatting=false ("0 bytes" not "Zero KB") fixed in Task 8 — cost: none. Accepted: projects falls back to refreshSummaries; FEATHERWEIGHT_STATE_DIR (CLI-only test override) sets home to state dir.
+- Task 8: Ruling: AppVersion resolves the real executable path (Bundle.main.executablePath / _NSGetExecutablePath, symlinks resolved), argv[0] only as fallback — plan's argv[0] mandate yields wrong result — cost: none.
+- Task 8: Ruling: promote Minor "lock failure still prints Freed 0 bytes on stdout" — on a report with no record (job didn't run) print only errors — cost: none.
+- Task 9: Ruling: helper drops AppKit (NSApplication ≈35 MB RSS vs 6 MB without); wake detection via IOKit power notifications; budget measured as RSS — cost if wrong: if UNUserNotificationCenter needs NSApplication in the bundled helper (verified in Task 16), restore NSApplication and accept ~36 MB.
+- Task 9: Ruling: accept helper-side fix for FSEvents ID lag (treat events as own until the job's history.jsonl write event arrives, 30 s cap) — Task 7's lastFSEventID is taken before fseventsd numbers the job's last changes — cost: a real install within that window after a job may be ignored until the next event/sweep.
+- Task 9: Ruling: composer frequency wording extension accepted (defaults match brief).
+- Task 9: Ruling: plan-mandated #4 — exclude configured node_modules cache folders from install detection (spec: dedupe after installs, not cache churn) — cost: an install that only touches node_modules/.cache isn't seen (irrelevant).
+- Task 9: Ruling: plan-mandated #5 — isAlive also verifies process name/path is FeatherweightHelper; uninstall deletes pid file — cost: none.
+- Task 9: Ruling: promote Minors "FSEvents drop/MustScanSubDirs flags ignored" and "helper logs lost under launchd (use os.Logger)" — missed installs and invisible diagnostics — cost: small.
+- Task 9: Ruling: accept scoped drop (no batch pre-scan raise) for other-process jobs — avoids discarding real installs earlier in the batch; paused queued job dropped not requeued (daily sweep covers) — cost: minor delay.
+- Task 10: Ruling: carry Task 10 Minors 1 (notice banner only on Overview), 2 (pause toggle writes stale in-memory settings), 5 (hero label baseline misalignment), 8 (snapshot mode must refuse without FEATHERWEIGHT_STATE_DIR) into the Task 11 dispatch — UI polish/settings-overwrite fixed while the app is fresh — cost: slightly larger Task 11.
+- Task 11: Ruling: project discovery also skips deploy/build output dirs (.vercel, .netlify, .svelte-kit, .wrangler, .firebase, .expo) — real scan listed hugh-herschell-folio/.vercel/output/functions/__nitro.func as a project — cost: none (they're generated). To be applied in Task 11 fix round.
+- Task 11: Ruling: plan-mandated "no unit tests" overridden for pure logic — move RemoteText and ProjectRows.arrange into Core with tests; Core strips credentials before storing remoteURL in projects.json (promoted Minor 7); ProjectSummary gains `skipReason: SkipReason?` so the app stops string-matching statuses (promoted Minor 1) — cost: small Core change.
+- Task 12: Ruling: for parent-folder sync risk — FolderPolicy keeps allowing parents, but ProjectScanner skips ~/Library/Mobile Documents, ~/Library/CloudStorage and any ubiquitous (iCloud) directory — cost: projects inside synced folders are never found (intended).
+- Task 12: Ruling: promote Minor "stale notice reported as failure / refused first-launch job silent" — cost: small.
+- Ruling: v1 removes Task 11's "Convert to pnpm…" placeholder button (no dead buttons) — done in Task 16 dispatch; README omits conversion — cost: re-add button when the branch resumes.
+- Ruling: Task 16 Step 3 (quarantine/Gatekeeper Open Anyway, LaunchAgent at login, bundled notifications) and the light-mode popup check need Hugh's hands (security setting + persistent install) — deferred to a guided check with Hugh after Task 18; Task 16 implementer does build/sign/verify/lipo/size only — cost: those behaviours unverified until then.
+- Task 16: Ruling: promote Minors 1 (skip reinstall when app is translocated), 2 (find-identity -v -p codesigning), 3 (CLI --identifier com.novacoax.featherweight.cli), 4 (validate X.Y.Z, clean usage error) into fix round — cost: small.
+- Task 16: Ruling: carry M1 (find-identity | grep -q SIGPIPE under pipefail) into Task 17 dispatch — same scripts area — cost: none.
+- Ruling (Hugh's instruction 2026-11-09): to cut token use, Tasks 17-18 get NO per-task review; one review pass after both are done (folded into the final whole-branch review).
+- Ruling: one fix wave covers Important 1 + all script/README Minors; Important 2-3 are Hugh's hands-on steps (cert creation touches keychain; Gatekeeper check is a security setting) — cost: v0.1.0 waits for those steps.
+- Ruling: deferred-minor to schedule: tolerant Settings init(from:) before the first Settings schema change (else upgrade resets folders/paused).
+
+## Deferred minor issues
+
+- Task 1: minor (deferred): LoginShellEnvironment timeout only covers EOF, SIGTERM without SIGKILL
+- Task 1: minor (deferred): Settings synthesized Codable — new fields would reset user settings; no validation of hour/minute
+- Task 1: minor (deferred): PATH lookup may match a directory
+- Task 1: minor (deferred): CLI hard-codes 0.1.0 (Task 8 replaces with AppVersion)
+- Task 1: minor (deferred): tests leave temp dirs; ByteFormat untested; unicode test lacks trailing space
+- Task 1: minor (deferred): PipeReader.read(timeout:) single-use; 2 s post-exit grace could truncate slow large output; wall-clock test bounds
+- Task 2: minor (deferred): untested folder-is-project branch, overlapping-folder dedupe, deeper nearestAncestor chains; early exit untested
+- Task 2: minor (deferred): isActive walks all node_modules for inactive projects (perf; watch in Task 9 budget)
+- Task 2: minor (deferred): TempTree.setAllMTimes doc says files but touches dirs, follows symlinks
+- Task 2: minor (deferred): force unwrap newest! in ActivityChecker.swift:48
+- Task 2: minor (deferred): PackageManager.none collides with Optional.none (plan-mandated name)
+- Task 2: minor (deferred): scan(folders:) cannot surface an inaccessible top-level folder (Task 12 FolderPolicy covers UX)
+- Task 2: minor (deferred): Project.root for a symlinked scan folder is the resolved real path — UI comparing roots to configured folder strings must resolve too
+- Task 3: minor (deferred): no sweep of orphan .fw- files after crash/kill (consider at dedupe start)
+- Task 3: minor (deferred): relative URL without dir builds tmp at /; names >~214 bytes fail silently (ENAMETOOLONG)
+- Task 3: minor (deferred): info(at:) lstat+getattrlist not atomic; missing privateSize reads as 0; privateBytes getattrlist on dirs; test gaps (same-size mtime change, lchown mismatch, rename failure cleanup)
+- Task 3: minor (deferred): lchflags(tmp,0) drops benign duplicate flags (UF_HIDDEN/NODUMP); schg/sappnd keeper may leave temp (now reported cleanupFailed) — consider pre-refusing SF_* keepers
+- Task 3: minor (deferred): late re-check ignores st_nlink race; refusesCompressedKeeper requires a compressed file in /usr/bin (fails rather than skips elsewhere)
+- Task 4: minor (deferred): stale-race window between info and hashing (Task 5 pre-rename recheck covers); lock held across hashing; WAL/busy_timeout results unchecked; prune prefix needs trailing separator (doc)
+- Task 4: minor (deferred): no regression test for hash memory; size-only test doesn't assert inode/mtime equality
+- Task 5: minor (deferred): keeper "most common cloneID" rule untested
+- Task 5: minor (deferred): dry-run bytes differ from real run with existing clone families / compressed / aliasing
+- Task 5: minor (deferred): Member stores full CloneInfo — ~250 B per candidate (≈125 MB at 500k files); bySize.filter copy
+- Task 5: minor (deferred): no (device,inode) dedup in walk (case-insensitive/firmlink aliasing)
+- Task 5: minor (deferred): orphan .fw- temp clones counted by meter and eligible as keeper — exclude ".fw-" names
+- Task 5: minor (deferred): meter walk errors discarded; compressed keeper retried per member; error text format inconsistent; ctime not in change check
+- Task 5: minor (deferred): BackgroundWork.run blocks caller on semaphore — never call from main actor/async contexts (carry to Task 10)
+- Task 6: minor (deferred): URL?? memo + force unwraps in CacheCleaner; physicalPath duplicates canonicalisation
+- Task 6: minor (deferred): TOCTOU between final containment check and removeItem (unlinkat would close); commit accepts directory pathspecs (doc says exactly files)
+- Task 6: minor (deferred): no test for same-root-twice branch; locale test assumes no repo above temp dir; GIT_CONFIG_PARAMETERS/COUNT inherited; mount-point backstop still reads as no-repo; hdiutil e2e test needs disk-image attach in CI
+- Task 7: minor (deferred): standalone refreshSavings/refreshSummaries unlocked (can overwrite fresher job output); withLock not re-entrant (Task 13 must not call dedupe/clean inside withLock); "Cleared caches" sticky; dedupe N counts only losing projects; HistoryStore reads whole file per query; redundant disk walks; test gaps (onWaiting not called when free; concurrent append)
+- Task 7: minor (deferred): short-write errno; RunRecord.errors snapshot excludes stats/projects write failures; no spring-forward isOverdue / weekly DST tests
+- Task 8: minor (deferred): no-folders hint on stdout exit 0; projects fallback writes projects.json unlocked; dry runs lockless; clean reloads settings 3x; no Commands-layer tests
+- Task 8: minor (deferred): finish(didNotRun:) silent exit if errors empty; no direct test of AppVersion.current ordering or nil-record CLI branch
+- Task 9: minor (deferred): installs during a busy job dropped (consider kFSEventStreamCreateFlagIgnoreSelf); fast install in unscanned project lost; lock-blocked scheduled run not retried promptly; TZ/clock change no reschedule; plist left after failed bootstrap; duplicated realpath (PhysicalPath.resolve); state-dir source never recovers after dir deletion
+- Task 9: minor (deferred): scoped drop misses projects renamed early in long other-process jobs (one wasted run); record.projects excludes projects with only failed replacements; MustScanSubDirs path trailing-slash; drop path skips unknown-project rescan
+- Task 10: minor (deferred): unused DateText.schedule & cliExecutable (cli used in Task 12); OverviewView indentation; reload decodes history twice on main actor; DateText untested + DateFormatter per call; watcher misses history appends
+- Task 11: minor (deferred): stale selection after filtering; empty-filter "No results for ''"; placeholder notice uses warning styling; Clear caches no confirmation; name-only search
+- Task 11: minor (deferred): old projects.json rows without skipReason show non-skip tone until next refresh; RemoteURL on "@scope/repo" relative path; ProjectRows parent cycle drops both
+- Task 12: minor (deferred): URLSession not invalidated; AppState in UpdateChecker.swift; custom cache names trimmed of trailing spaces; nested folders addable twice; FolderPicker privacy prompt doesn't mention helper; three scans per estimate; no AppModel flow tests; manual CLI uninstall touched real /opt/homebrew/bin candidates
+- Task 12: minor (deferred): CLI uninstall could remove a Homebrew link if the running CLI is itself the Cellar binary; busy notice persists after job ends; top-level scan folder not checked for isUbiquitousItem (FolderPolicy covers)
+- Task 16: minor (deferred): iconset temp dir leaks on failure (trap); du padding; no automated bundle smoke test
+- Final fix wave: 9 addressed, 0 open (commits 10eaae8..1bb44d4); minor (deferred): create-cert untrusted path doesn't re-verify identity; setup hooksPath equivalent-path prompt; fetch updates tracking ref; macOS 14 dialog button wording unverified; no shell tests; ssh host aliases skip release; ssh passphrase prompt in detached publisher
