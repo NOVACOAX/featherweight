@@ -212,6 +212,26 @@ import Testing
         #expect(throws: GitError.self) { try GitClient(runner: runner).findRepoRoot(for: tree.root) }
     }
 
+    @Test func stoppingAtAMountPointCountsAsNoRepository() throws {
+        let tree = try TempTree()
+        defer { tree.remove() }
+        let runner = FakeRunner { _, _ in
+            CommandResult(
+                exitCode: 128, stdout: "",
+                stderr: "fatal: not a git repository (or any parent up to mount point /Volumes/Ext)\nStopping at filesystem boundary (GIT_DISCOVERY_ACROSS_FILESYSTEM not set).\n")
+        }
+        #expect(try GitClient(runner: runner).findRepoRoot(for: tree.root) == nil)
+    }
+
+    @Test func mountPointMessageWithoutTheBoundaryLineIsAnError() throws {
+        let tree = try TempTree()
+        defer { tree.remove() }
+        let runner = FakeRunner { _, _ in
+            CommandResult(exitCode: 128, stdout: "", stderr: "fatal: not a git repository (or any parent up to mount point /Volumes/Ext)\n")
+        }
+        #expect(throws: GitError.self) { try GitClient(runner: runner).findRepoRoot(for: tree.root) }
+    }
+
     @Test func checkTrackedThrowsOnGitFailure() throws {
         let tree = try TempTree(["a.txt": "1"])
         defer { tree.remove() }

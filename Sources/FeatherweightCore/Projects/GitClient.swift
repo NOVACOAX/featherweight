@@ -38,12 +38,7 @@ public struct GitClient: Sendable {
         let args = ["rev-parse", "--show-toplevel"]
         let result = try exec(args, in: directory)
         if !result.succeeded {
-            // The full "(or any of the parent directories)" message only: a dangling `.git` file
-            // says just "not a git repository: <path>", and that is an error, not "no repo".
-            if result.exitCode == 128
-                && result.stderr.contains("not a git repository (or any of the parent directories)") {
-                return nil
-            }
+            if result.exitCode == 128 && Self.isNotARepositoryMessage(result.stderr) { return nil }
             throw Self.failure(args, result)
         }
         // Trim only line endings: a path may legitimately end in a space.
@@ -123,6 +118,15 @@ public struct GitClient: Sendable {
     private func runChecked(_ args: [String], in directory: URL) throws {
         let result = try exec(args, in: directory)
         guard result.succeeded else { throw Self.failure(args, result) }
+    }
+
+    /// git's exact "no repository here" messages: the usual one, and the one used when discovery
+    /// stops at a mount point (a project on an external drive). Matching only these keeps other
+    /// failures, such as a dangling `.git` file ("not a git repository: <path>"), as errors.
+    private static func isNotARepositoryMessage(_ stderr: String) -> Bool {
+        stderr.contains("not a git repository (or any of the parent directories)")
+            || (stderr.contains("not a git repository (or any parent up to mount point ")
+                && stderr.contains("Stopping at filesystem boundary"))
     }
 
     private static func failure(_ args: [String], _ result: CommandResult) -> GitError {

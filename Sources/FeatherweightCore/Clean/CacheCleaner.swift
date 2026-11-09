@@ -2,8 +2,8 @@ import Foundation
 
 public enum SkipReason: String, Codable, Sendable {
     case recentlyActive, trackedInGit, notEnabled
-    /// Git could not say whether the folder is tracked (not the same as "not a repository"), so it
-    /// is left alone; the cause is in `CleanReport.errors`.
+    /// Git could not say whether the folder is tracked (not the same as "not a repository"), or the
+    /// folder could not be fully scanned, so it is left alone; the cause is in `CleanReport.errors`.
     case gitUnavailable
     /// At removal time the folder was no longer a plain directory inside the project (it was
     /// replaced by a symlink, say).
@@ -122,7 +122,7 @@ public struct CacheCleaner: Sendable {
                     beforeRemoval(candidate)
                     var fresh = ProjectState()
                     switch evaluate(candidate, in: entry.project, window: window, state: &fresh) {
-                    case .gitError(let error):
+                    case .failed(let error):
                         report.errors.append(error)
                         candidate = candidate.withSkip(.gitUnavailable)
                     case .skip(let skip):
@@ -157,7 +157,6 @@ public struct CacheCleaner: Sendable {
 
     /// Per-project facts that are expensive to compute, filled in lazily.
     private struct ProjectState {
-        var repoRoot: URL??
         var active: Bool?
     }
 
@@ -189,7 +188,7 @@ public struct CacheCleaner: Sendable {
                 if setting.enabled {
                     switch evaluate(candidate, in: project, window: window, state: &state) {
                     case .skip(let skip): candidate = candidate.withSkip(skip)
-                    case .gitError(let error):
+                    case .failed(let error):
                         errors.append(error)
                         candidate = candidate.withSkip(.gitUnavailable)
                     }
@@ -203,7 +202,7 @@ public struct CacheCleaner: Sendable {
     private enum Verdict {
         case skip(SkipReason?)
         /// Git failed; the candidate must be skipped and the message reported.
-        case gitError(String)
+        case failed(String)
     }
 
     /// Why an enabled candidate must be skipped, checked in order: containment, git, activity.
@@ -215,21 +214,38 @@ public struct CacheCleaner: Sendable {
         guard Self.isPlainDirectoryInside(folder, relativePath: candidate.relativePath, root: project.root)
         else { return .skip(.pathChanged) }
         // A nested repository or submodule inside the folder: its tracking is not inspected.
-        if Self.scan(folder).containsGit { return .skip(.containsRepository) }
+        // A folder that cannot be scanned completely is not provably free of one either.
+        let scan = Self.scan(folder)
+        if let problem = scan.problem {
+            return .failed("\(candidate.folder): could not scan folder, skipped (\(problem))")
+        }
+        if scan.containsGit { return .skip(.containsRepository) }
         do {
-            // Ask the project's repository and, when different, the innermost repository around
-            // the folder (an independent repo between the project and the folder).
-            if state.repoRoot == nil { state.repoRoot = .some(try git.findRepoRoot(for: project.root)) }
-            let outer = state.repoRoot!
-            let inner = try git.findRepoRoot(for: folder)
-            for root in [outer, inner == outer ? nil : inner] {
-                if let root, try git.checkTracked(folder, repoRoot: root) { return .skip(.trackedInGit) }
+            // Every repository enclosing the folder, innermost first, may track it (a repo can
+            // be created inside a directory an outer repo already committed). Any one that does,
+            // or any git error along the way, protects it.
+            for root in try enclosingRepositories(of: folder) where try git.checkTracked(folder, repoRoot: root) {
+                return .skip(.trackedInGit)
             }
         } catch {
-            return .gitError("\(candidate.folder): git check failed, skipped (\(error))")
+            return .failed("\(candidate.folder): git check failed, skipped (\(error))")
         }
         if state.active == nil { state.active = activity.isActive(root: project.root, window: window) }
         return .skip(state.active! ? .recentlyActive : nil)
+    }
+
+    /// Roots of all repositories containing `folder`, innermost first.
+    private func enclosingRepositories(of folder: URL) throws -> [URL] {
+        var roots: [URL] = []
+        var next = try git.findRepoRoot(for: folder)
+        while let root = next {
+            roots.append(root)
+            let parent = root.deletingLastPathComponent()
+            // Stop at the file-system root; the depth cap is a backstop against a loop.
+            if parent.path == root.path || roots.count > 64 { break }
+            next = try git.findRepoRoot(for: parent)
+        }
+        return roots
     }
 
     /// A real directory (not a symlink) whose physical path is exactly the project's physical root
@@ -253,12 +269,18 @@ public struct CacheCleaner: Sendable {
     }
 
     /// Allocated size of everything under `folder`, and whether any entry in it (file or
-    /// directory, at any depth) is named `.git`. Symlinks are not followed.
-    private static func scan(_ folder: URL) -> (bytes: Int64, containsGit: Bool) {
+    /// directory, at any depth) is named `.git`. Symlinks are not followed. `problem` is set when
+    /// part of the folder could not be read, in which case the other results are incomplete.
+    private static func scan(_ folder: URL) -> (bytes: Int64, containsGit: Bool, problem: String?) {
         let keys: [URLResourceKey] = [.totalFileAllocatedSizeKey, .fileAllocatedSizeKey]
+        var problem: String?
         guard let enumerator = FileManager.default.enumerator(
-            at: folder, includingPropertiesForKeys: keys, options: []
-        ) else { return (0, false) }
+            at: folder, includingPropertiesForKeys: keys, options: [],
+            errorHandler: { url, error in
+                problem = problem ?? "\(url.path): \(error.localizedDescription)"
+                return true
+            }
+        ) else { return (0, false, "cannot enumerate folder") }
         var total: Int64 = 0
         var containsGit = false
         for case let url as URL in enumerator {
@@ -266,7 +288,7 @@ public struct CacheCleaner: Sendable {
             guard let values = try? url.resourceValues(forKeys: Set(keys)) else { continue }
             total += Int64(values.totalFileAllocatedSize ?? values.fileAllocatedSize ?? 0)
         }
-        return (total, containsGit)
+        return (total, containsGit, problem)
     }
 }
 

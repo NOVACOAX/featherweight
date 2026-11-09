@@ -495,6 +495,84 @@ extension CacheCleanerTests {
     }
 }
 
+extension CacheCleanerTests {
+    private func runDefault(_ tree: TempTree, project root: URL) -> CleanReport {
+        try? tree.setAllMTimes(to: Date(timeIntervalSinceNow: -30 * 24 * 3600))
+        return CacheCleaner(git: GitClient(runner: GitFixture.runner), activity: ActivityChecker())
+            .run(projects: [Project(root: root, parentRoot: nil, packageManager: .npm, nodeModules: nil)],
+                 settings: Settings.defaults(home: tree.root), dryRun: false)
+    }
+
+    @Test func outerRepositoryThatTracksTheFolderProtectsItEvenWhenTheProjectIsItsOwnRepo() throws {
+        let tree = try TempTree(["proj/src/index.ts": "x", "proj/.next/keep.txt": "k"])
+        defer { tree.remove() }
+        try GitFixture.initRepo(tree.root)  // outer repo G commits proj/.next/keep.txt
+        // proj later becomes its own repo P, committing only src.
+        try GitFixture.git(["init", "-q", "-b", "main"], in: tree.url("proj"))
+        try GitFixture.git(["add", "src"], in: tree.url("proj"))
+        try GitFixture.git(["commit", "-q", "-m", "p"], in: tree.url("proj"))
+
+        let report = runDefault(tree, project: tree.url("proj"))
+
+        #expect(FileManager.default.fileExists(atPath: tree.url("proj/.next/keep.txt").path))
+        #expect(report.skipped.first?.skip == .trackedInGit)
+        #expect(report.cleared.isEmpty)
+    }
+
+    @Test func middleRepositoryThatTracksTheFolderProtectsIt() throws {
+        let tree = try TempTree([
+            "proj/mid/app/src/i.ts": "x", "proj/mid/app/.cache/k.txt": "k", "other.txt": "o",
+        ])
+        defer { tree.remove() }
+        let mid = tree.url("proj/mid")
+        let app = tree.url("proj/mid/app")
+        try GitFixture.git(["init", "-q", "-b", "main"], in: tree.root)  // outermost, tracks nothing relevant
+        try GitFixture.git(["init", "-q", "-b", "main"], in: mid)
+        try GitFixture.git(["add", "-A"], in: mid)  // middle repo M commits app/.cache/k.txt
+        try GitFixture.git(["commit", "-q", "-m", "m"], in: mid)
+        try GitFixture.git(["init", "-q", "-b", "main"], in: app)  // innermost P commits only src
+        try GitFixture.git(["add", "src"], in: app)
+        try GitFixture.git(["commit", "-q", "-m", "p"], in: app)
+
+        let report = runDefault(tree, project: app)
+
+        #expect(FileManager.default.fileExists(atPath: tree.url("proj/mid/app/.cache/k.txt").path))
+        #expect(report.skipped.first { $0.relativePath == ".cache" }?.skip == .trackedInGit)
+        #expect(report.cleared.isEmpty)
+    }
+
+    @Test func untrackedFolderInsideSeveralRepositoriesIsStillCleaned() throws {
+        let tree = try TempTree(["proj/src/index.ts": "x", "proj/.next/a": "y"])
+        defer { tree.remove() }
+        try GitFixture.git(["init", "-q", "-b", "main"], in: tree.root)
+        try GitFixture.git(["init", "-q", "-b", "main"], in: tree.url("proj"))
+
+        let report = runDefault(tree, project: tree.url("proj"))
+
+        #expect(!FileManager.default.fileExists(atPath: tree.url("proj/.next").path))
+        #expect(report.errors.isEmpty)
+    }
+
+    @Test func unreadableSubdirectoryFailsClosed() throws {
+        let tree = try TempTree(["src/index.ts": "x", ".next/ok.js": "y", ".next/locked/inner.js": "z"])
+        defer { tree.remove() }
+        let locked = tree.url(".next/locked").path
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: locked)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: locked) }
+        try tree.setAllMTimes(to: Date(timeIntervalSinceNow: -30 * 24 * 3600))
+
+        let report = CacheCleaner(git: GitClient(runner: GitFixture.runner), activity: ActivityChecker())
+            .run(projects: [Project(root: tree.root, parentRoot: nil, packageManager: .npm, nodeModules: nil)],
+                 settings: Settings.defaults(home: tree.root), dryRun: false)
+
+        #expect(FileManager.default.fileExists(atPath: tree.url(".next/ok.js").path))
+        #expect(report.cleared.isEmpty)
+        #expect(report.skipped.first?.skip == .gitUnavailable)
+        #expect(report.errors.count == 1)
+        #expect(report.errors.first?.contains("could not scan") == true)
+    }
+}
+
 /// Runs a closure instead of a real command.
 struct FakeRunner: CommandRunner {
     let handler: @Sendable (String, [String]) throws -> CommandResult
