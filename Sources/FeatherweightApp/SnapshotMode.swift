@@ -167,6 +167,7 @@ enum SnapshotMode {
             contentRect: frame, styleMask: [.titled, .closable, .resizable, .fullSizeContentView],
             backing: .buffered, defer: false)
         window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+        NSApp.appearance = window.appearance
         window.contentView = host
         window.setFrame(window.frameRect(forContentRect: frame), display: true)
         window.orderBack(nil)
