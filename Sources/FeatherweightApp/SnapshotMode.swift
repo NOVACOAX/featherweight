@@ -11,6 +11,8 @@ import SwiftUI
 /// state directory. It also runs real jobs (a dry run of each, then a real dedupe) against that
 /// directory's settings; set `FEATHERWEIGHT_SNAPSHOT_ONLY` to a comma-separated list of screens
 /// (`overview`, `projects`, `activity`, `settings`, `onboarding`) to draw just those and run no jobs at all.
+/// `conversion` and `conversion-failure` (never part of a default run) convert the first npm project
+/// in that directory's folders end to end, through the same calls as the sheets' buttons.
 @MainActor
 enum SnapshotMode {
     static func runIfRequested() {
@@ -92,6 +94,13 @@ enum SnapshotMode {
                          to: directory.appendingPathComponent("onboarding-\(dark ? "dark" : "light").png"))
             }
         }
+        // Never part of a default run: these convert a real project in the state directory's folders.
+        if only?.contains("conversion") == true {
+            await runConversion(model: model, into: directory)
+        }
+        if only?.contains("conversion-failure") == true {
+            await runFailingConversion(model: model, into: directory)
+        }
         if only != nil { return }
 
         // Real dry runs against whatever the state directory's settings point at.
@@ -124,6 +133,114 @@ enum SnapshotMode {
             try? await Task.sleep(for: .milliseconds(100))
         }
         print("watcher saw external settings change: \(model.settings.paused == changed.paused)")
+    }
+
+    // MARK: Conversion end to end
+
+    /// Converts the first top-level npm project through the same `AppModel` calls the sheets' buttons
+    /// make, drawing each sheet: confirm, progress, done, then Commit & Push (only to a remote that is
+    /// a local path, so it can never reach GitHub), then the inspector's Revert.
+    private static func runConversion(model: AppModel, into directory: URL) async {
+        guard let project = model.projects.first(where: { $0.packageManager == .npm && $0.parentRoot == nil }) else {
+            print("conversion: no top-level npm project in the state directory's folders")
+            return
+        }
+        print("conversion: \(project.name), blocker: \(model.conversionBlocker(for: project) ?? "none")")
+        snapshot(MainWindow(model: model, selection: .projects, project: project.id).tint(Theme.amber),
+                 size: CGSize(width: 980, height: 640), dark: false,
+                 to: directory.appendingPathComponent("conversion-inspector-light.png"))
+        guard let session = await openConversion(model: model, project: project, into: directory) else { return }
+
+        async let converting: Void = model.convert(session)
+        try? await Task.sleep(for: .seconds(3))
+        if case .running = session.phase {
+            snapshot(ConversionSheet(session: session, model: model).tint(Theme.amber), size: nil, dark: false,
+                     to: directory.appendingPathComponent("conversion-progress-light.png"))
+        }
+        await converting
+        guard case .done(let result) = session.phase else {
+            if case .failed(let failure) = session.phase {
+                print("conversion: failed at \(failure.step), reverted \(failure.reverted)\n$ \(failure.command)\n\(failure.output)")
+            }
+            return
+        }
+        print("conversion: freed \(result.bytesFreed) bytes, pnpm \(result.pnpmVersion)")
+        for change in result.changes { print("  \(change.kind) \(change.relativePath)") }
+        for warning in result.warnings { print("  warning \(warning.file):\(warning.line) \(warning.text)") }
+        print("conversion: git \(session.git.map { "\($0.repoRoot.path) upstream \($0.upstream ?? "none") remote \($0.remote ?? "none")" } ?? "none")")
+        for dark in [false, true] {
+            snapshot(ConversionSheet(session: session, model: model).tint(Theme.amber), size: nil, dark: dark,
+                     to: directory.appendingPathComponent("conversion-done-\(dark ? "dark" : "light").png"))
+        }
+
+        if let git = session.git, git.upstream != nil {
+            let remote = GitClient(runner: ProcessCommandRunner()).remoteURL(git.repoRoot, remote: "origin") ?? ""
+            if remote.hasPrefix("/") || remote.hasPrefix("file://") {
+                await model.pushConversion(session)
+                print("conversion: commit -> \(session.commit)")
+                snapshot(ConversionSheet(session: session, model: model).tint(Theme.amber), size: nil, dark: false,
+                         to: directory.appendingPathComponent("conversion-pushed-light.png"))
+            } else {
+                print("conversion: not pushing to a non-local remote")
+            }
+        }
+        model.closeConversion()
+
+        guard let converted = model.projects.first(where: { $0.id == project.id }) else { return }
+        print("conversion: now \(converted.packageManager), revert to \(model.revertTargets[converted.id]?.rawValue ?? "none")")
+        snapshot(MainWindow(model: model, selection: .projects, project: converted.id).tint(Theme.amber),
+                 size: CGSize(width: 980, height: 640), dark: false,
+                 to: directory.appendingPathComponent("conversion-revert-inspector-light.png"))
+        await model.revertProject(converted)
+        let reverted = model.projects.first { $0.id == project.id }
+        print("conversion: after revert \(reverted?.packageManager.rawValue ?? "?"), notice: \(model.notice ?? "none")")
+        for record in model.history.prefix(2) { print("  history \(record.kind): \(record.summary) \(record.errors)") }
+    }
+
+    /// Converts the first top-level npm project and expects a failure (break it first), drawing the
+    /// failure sheet.
+    private static func runFailingConversion(model: AppModel, into directory: URL) async {
+        guard let project = model.projects.first(where: { $0.packageManager == .npm && $0.parentRoot == nil }),
+              let session = await openConversion(model: model, project: project, into: nil) else {
+            print("conversion-failure: nothing to convert")
+            return
+        }
+        await model.convert(session)
+        if case .failed(let failure) = session.phase {
+            print("conversion-failure: failed at \(failure.step), reverted \(failure.reverted), command \(failure.command)")
+        } else {
+            print("conversion-failure: did not fail")
+        }
+        snapshot(ConversionSheet(session: session, model: model).tint(Theme.amber), size: nil, dark: false,
+                 to: directory.appendingPathComponent("conversion-failed-light.png"))
+        model.closeConversion()
+    }
+
+    /// Starts the flow and waits for the pnpm check; draws the confirm sheet when `directory` is set.
+    private static func openConversion(
+        model: AppModel, project: ProjectSummary, into directory: URL?
+    ) async -> ConversionSession? {
+        model.startConversion(of: project)
+        guard let session = model.conversion else { return nil }
+        for _ in 0..<300 {
+            if case .checkingPnpm = session.phase { try? await Task.sleep(for: .milliseconds(100)) } else { break }
+        }
+        guard case .confirm = session.phase else {
+            print("conversion: pnpm check ended in \(session.phase)")
+            if let directory {
+                snapshot(ConversionSheet(session: session, model: model).tint(Theme.amber), size: nil, dark: false,
+                         to: directory.appendingPathComponent("conversion-install-pnpm-light.png"))
+            }
+            model.closeConversion()
+            return nil
+        }
+        if let directory {
+            for dark in [false, true] {
+                snapshot(ConversionSheet(session: session, model: model).tint(Theme.amber), size: nil, dark: dark,
+                         to: directory.appendingPathComponent("conversion-confirm-\(dark ? "dark" : "light").png"))
+            }
+        }
+        return session
     }
 
     /// Prints how many rows the Projects table shows for each filter and a few searches.

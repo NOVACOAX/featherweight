@@ -33,6 +33,10 @@ final class AppModel {
     var runningJob: JobKind?
     var waitingForLock = false
     var previewResult: PreviewResult?
+    /// The open "Convert to pnpm…" flow, if any.
+    var conversion: ConversionSession?
+    /// Project path → the package manager its latest conversion backup can put back.
+    var revertTargets: [String: PackageManager] = [:]
     /// A problem the user should see (a job that did not run, a file that could not be saved).
     var notice: String?
     /// A newer release found on GitHub, shown as a link in the sidebar.
@@ -77,6 +81,12 @@ final class AppModel {
             atPath: paths.launchAgentsDir.appendingPathComponent("\(LaunchAgent.label).plist").path)
         cliCommandInstalled = !CLIInstaller(home: paths.home, pathEnv: "")
             .installedLinks(cli: HelperLocator.cliExecutable()).isEmpty
+        var targets: [String: PackageManager] = [:]
+        for project in projects where project.packageManager == .pnpm {
+            let root = URL(fileURLWithPath: project.id, isDirectory: true)
+            if let backup = ConversionBackup.latest(for: root, paths: paths) { targets[project.id] = backup.originalManager }
+        }
+        revertTargets = targets
     }
 
     // MARK: Jobs
@@ -139,6 +149,208 @@ final class AppModel {
         }
         reload()
         return problem
+    }
+
+    // MARK: Converting to pnpm
+
+    /// Why `project` can't be converted right now, or nil when it can. Only asked for npm and yarn
+    /// projects; uses the activity the last scan recorded rather than scanning again.
+    func conversionBlocker(for project: ProjectSummary) -> String? {
+        let session = Project(
+            root: URL(fileURLWithPath: project.id, isDirectory: true), parentRoot: nil,
+            packageManager: project.packageManager, nodeModules: nil)
+        return ConversionEligibility.check(session, recentlyActive: project.skipReason == .recentlyActive)?
+            .message(windowHours: settings.activityWindowHours)
+    }
+
+    /// Opens the conversion sheets for `project`, starting with a check that pnpm 10+ is installed.
+    func startConversion(of project: ProjectSummary) {
+        guard conversion == nil else { return }
+        let session = ConversionSession(summary: project)
+        conversion = session
+        Task { await checkPnpm(session) }
+    }
+
+    private func checkPnpm(_ session: ConversionSession) async {
+        session.phase = .checkingPnpm
+        let (version, supported) = await Task.detached {
+            let toolchain = PnpmToolchain(runner: ProcessCommandRunner())
+            let version = toolchain.installedVersion()
+            return (version, version.map(toolchain.isSupported) ?? false)
+        }.value
+        session.phase = supported ? .confirm : .needsPnpm(found: version)
+    }
+
+    /// Runs the first pnpm install command that works (Corepack, then npm), then checks again.
+    func installPnpm(_ session: ConversionSession) async {
+        session.phase = .installingPnpm
+        session.installError = nil
+        let failure: String? = await Task.detached {
+            do {
+                _ = try PnpmToolchain(runner: ProcessCommandRunner()).install()
+                return nil
+            } catch let error as PnpmInstallError {
+                return error.output
+            } catch {
+                return "\(error)"
+            }
+        }.value
+        session.installError = failure
+        await checkPnpm(session)
+        if case .needsPnpm(let found?) = session.phase, failure == nil {
+            session.installError = "pnpm \(found) is still the one found first on your PATH."
+        }
+    }
+
+    /// Converts the session's project inside the job lock, showing each step and command.
+    func convert(_ session: ConversionSession) async {
+        if let refusal = begin(.convert) {
+            session.phase = .failed(ConversionFailure(step: .backingUp, command: "", output: refusal, reverted: true))
+            return
+        }
+        session.log = []
+        session.waitingForLock = false
+        session.phase = .running(.backingUp)
+        let project = session.project
+        let buildCheck = session.runBuildCheck && session.hasBuildScript
+        let paths = paths
+        enum Outcome: Sendable {
+            case done(ConversionResult, ConversionSession.GitTarget?)
+            case failed(ConversionFailure)
+        }
+        let outcome: Outcome = await Task.detached(priority: .userInitiated) { [weak session] in
+            let commands = LoggingCommandRunner(base: ProcessCommandRunner()) { line in
+                Task { @MainActor in session?.log.append(line) }
+            }
+            do {
+                let result = try JobRunner(paths: paths).convert(
+                    project, runBuildCheck: buildCheck, using: commands,
+                    onWaiting: { Task { @MainActor in session?.waitingForLock = true } }
+                ) { step in
+                    Task { @MainActor in session?.report(step) }
+                }
+                return .done(result, Self.gitTarget(for: project.root))
+            } catch let failure as ConversionFailure {
+                return .failed(failure)
+            } catch {
+                // Only the job lock throws anything else, and then nothing ran.
+                return .failed(ConversionFailure(
+                    step: .backingUp, command: "", output: Self.lockFailureText(error), reverted: true))
+            }
+        }.value
+        runningJob = nil
+        waitingForLock = false
+        session.waitingForLock = false
+        switch outcome {
+        case .done(let result, let git):
+            session.git = git
+            session.phase = .done(result)
+        case .failed(let failure):
+            session.phase = .failed(failure)
+        }
+        reload()
+    }
+
+    /// Reverts from the done sheet; the sheet closes when the project is back on npm or yarn.
+    func revertConversion(_ session: ConversionSession) async {
+        session.phase = .reverting
+        if let failure = await revert(session.project) {
+            session.phase = .revertFailed(failure)
+        } else {
+            conversion = nil
+        }
+    }
+
+    /// The inspector's "Revert to npm/yarn": shows what went wrong as a notice.
+    func revertProject(_ project: ProjectSummary) async {
+        let root = URL(fileURLWithPath: project.id, isDirectory: true)
+        if let failure = await revert(Project(root: root, parentRoot: nil, packageManager: project.packageManager, nodeModules: nil)) {
+            notice = "Reverting \(project.name) failed: \(failure.output)"
+        }
+    }
+
+    /// Puts `project` back as it was before its latest conversion. Returns the failure, or nil.
+    private func revert(_ project: Project) async -> ConversionFailure? {
+        if let refusal = begin(.revert) {
+            return ConversionFailure(step: .backingUp, command: "", output: refusal, reverted: false)
+        }
+        let paths = paths
+        let failure: ConversionFailure? = await Task.detached(priority: .userInitiated) { [weak self] in
+            do {
+                try JobRunner(paths: paths).revert(project, onWaiting: { Task { @MainActor in self?.waitingForLock = true } })
+                return nil
+            } catch let failure as ConversionFailure {
+                return failure
+            } catch {
+                return ConversionFailure(step: .backingUp, command: "", output: Self.lockFailureText(error), reverted: false)
+            }
+        }.value
+        runningJob = nil
+        waitingForLock = false
+        reload()
+        return failure
+    }
+
+    /// Commits exactly the files the conversion changed (those git sees as changed), then pushes
+    /// when `push` is set. A failed push leaves the commit in place and shows git's output.
+    func commitConversion(_ session: ConversionSession, push: Bool) async {
+        guard case .done(let result) = session.phase, let git = session.git else { return }
+        let message = session.commitMessage.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !message.isEmpty else {
+            session.commit = .failed("Write a commit message first.")
+            return
+        }
+        session.commit = .working(pushing: push)
+        let projectRoot = session.project.root
+        let state: ConversionSession.CommitState = await Task.detached(priority: .userInitiated) {
+            let client = GitClient(runner: ProcessCommandRunner())
+            do {
+                let wanted = ConversionCommit.repoPaths(result.changes, projectRoot: projectRoot, repoRoot: git.repoRoot)
+                let files = try client.changedPaths(wanted, repoRoot: git.repoRoot)
+                guard !files.isEmpty else {
+                    return .failed("The converted files already match the last commit, so there is nothing to commit.")
+                }
+                try client.commit(files: files, message: message, repoRoot: git.repoRoot)
+                guard push else { return .committed(pushedTo: nil) }
+                let pushed = try client.push(repoRoot: git.repoRoot)
+                let output = (pushed.stderr + pushed.stdout).trimmingCharacters(in: .whitespacesAndNewlines)
+                return pushed.succeeded ? .committed(pushedTo: git.upstream) : .pushFailed(output)
+            } catch GitError.commandFailed(let command, _, let stderr) {
+                let output = stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+                return .failed(output.isEmpty ? "\(command) failed." : output)
+            } catch {
+                return .failed("\(error)")
+            }
+        }.value
+        session.commit = state
+        reload()
+    }
+
+    /// "Commit & Push".
+    func pushConversion(_ session: ConversionSession) async {
+        await commitConversion(session, push: true)
+    }
+
+    /// Closes the conversion sheets.
+    func closeConversion() {
+        conversion = nil
+        reload()
+    }
+
+    /// The repository around `root`, its upstream and that remote's address (without credentials).
+    private nonisolated static func gitTarget(for root: URL) -> ConversionSession.GitTarget? {
+        let git = GitClient(runner: ProcessCommandRunner())
+        guard let repoRoot = git.repoRoot(for: root) else { return nil }
+        let upstream = git.upstream(repoRoot)
+        let remote = upstream
+            .flatMap { $0.split(separator: "/").first.map(String.init) }
+            .flatMap { git.remoteURL(repoRoot, remote: $0) }
+            .flatMap(RemoteURL.hostAndPath)
+        return ConversionSession.GitTarget(repoRoot: repoRoot, upstream: upstream, remote: remote)
+    }
+
+    private nonisolated static func lockFailureText(_ error: any Error) -> String {
+        "Could not take the Featherweight job lock: \(error.localizedDescription)"
     }
 
     // MARK: Settings and helper

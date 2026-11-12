@@ -65,6 +65,18 @@ struct ConversionEligibilityTests {
         #expect(try check(tree, .npm) == .recentlyActive)
     }
 
+    @Test func knownActivitySkipsTheScan() throws {
+        let tree = try TempTree(["package.json": #"{ "workspaces": ["a"] }"#, "package-lock.json": "{}"])
+        defer { tree.remove() }
+        let project = Project(root: tree.root, parentRoot: nil, packageManager: .npm, nodeModules: nil)
+        #expect(ConversionEligibility.check(project, recentlyActive: false) == .workspaces)
+        try tree.add(["package.json": "{}"])
+        #expect(ConversionEligibility.check(project, recentlyActive: true) == .recentlyActive)
+        #expect(ConversionEligibility.check(project, recentlyActive: false) == nil)
+        let bun = Project(root: tree.root, parentRoot: nil, packageManager: .bun, nodeModules: nil)
+        #expect(ConversionEligibility.check(bun, recentlyActive: false) == .bun)
+    }
+
     @Test func noLockfileIsIneligible() throws {
         let tree = try TempTree(["package.json": "{}"])
         defer { tree.remove() }

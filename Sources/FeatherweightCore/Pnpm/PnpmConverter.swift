@@ -1,7 +1,19 @@
 import Foundation
 
-public enum ConversionStep: String, Sendable {
+public enum ConversionStep: String, Sendable, CaseIterable {
     case backingUp, importing, installing, buildCheck, rewritingConfigs, cleaningUp
+
+    /// Lowercase, to follow "while" or "at": "backing up files", "running the build".
+    public var displayText: String {
+        switch self {
+        case .backingUp: "backing up files"
+        case .importing: "creating pnpm-lock.yaml"
+        case .installing: "installing with pnpm"
+        case .buildCheck: "running the build"
+        case .rewritingConfigs: "updating configs"
+        case .cleaningUp: "cleaning up"
+        }
+    }
 }
 
 /// One project file the conversion added, modified or deleted, with a unified diff.
@@ -29,6 +41,13 @@ public struct ConversionFailure: Error {
     public let command: String
     public let output: String
     public let reverted: Bool
+
+    public init(step: ConversionStep, command: String, output: String, reverted: Bool) {
+        self.step = step
+        self.command = command
+        self.output = output
+        self.reverted = reverted
+    }
 }
 
 /// Converts an npm or yarn project to pnpm, and back. Every package-manager command runs through the

@@ -19,6 +19,16 @@ public enum Ineligibility: String, Codable, Sendable {
 public enum ConversionEligibility {
     /// Nil when `project` can be converted to pnpm.
     public static func check(_ project: Project, activity: ActivityChecker, windowHours: Int) -> Ineligibility? {
+        check(project) { activity.isActive(root: project.root, window: TimeInterval(windowHours) * 3600) }
+    }
+
+    /// The same check when the caller already knows whether the project was active (the app reads
+    /// it from the project summary instead of scanning the project again).
+    public static func check(_ project: Project, recentlyActive: Bool) -> Ineligibility? {
+        check(project) { recentlyActive }
+    }
+
+    private static func check(_ project: Project, isActive: () -> Bool) -> Ineligibility? {
         switch project.packageManager {
         case .bun: return .bun
         case .pnpm: return .alreadyPnpm
@@ -26,7 +36,7 @@ public enum ConversionEligibility {
         case .npm, .yarn: break
         }
         if usesWorkspaces(root: project.root) { return .workspaces }
-        if activity.isActive(root: project.root, window: TimeInterval(windowHours) * 3600) { return .recentlyActive }
+        if isActive() { return .recentlyActive }
         return nil
     }
 

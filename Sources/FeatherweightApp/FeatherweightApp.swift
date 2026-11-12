@@ -92,6 +92,9 @@ struct MainWindow: View {
                 model.previewResult = nil
             }
         }
+        .sheet(item: $model.conversion) { session in
+            ConversionSheet(session: session, model: model)
+        }
         .task { model.startWatching() }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             model.reload()

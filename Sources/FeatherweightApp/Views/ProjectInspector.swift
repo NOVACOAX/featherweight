@@ -56,7 +56,32 @@ struct ProjectInspector: View {
             }
             .disabled(skipReason != nil || busy)
             .help(skipReason ?? (busy ? "Another job is running" : "Delete this project's build caches"))
+
+            if project.packageManager == .npm || project.packageManager == .yarn {
+                let blocker = model.conversionBlocker(for: project)
+                Button("Convert to pnpm…") { model.startConversion(of: project) }
+                    .buttonStyle(AmberButtonStyle())
+                    .disabled(blocker != nil || busy)
+                    .help(blocker ?? (busy ? "Another job is running" : "Switch this project to pnpm, with a backup you can revert to"))
+            } else if project.packageManager == .pnpm, let original = model.revertTargets[project.id] {
+                if model.runningJob == .revert {
+                    ProgressView().controlSize(.small)
+                }
+                Button("Revert to \(original.rawValue)") { confirmingRevert = true }
+                    .disabled(busy)
+                    .help(busy ? "Another job is running" : "Undo the conversion to pnpm")
+                    .confirmationDialog(
+                        "Revert \(project.name) to \(original.rawValue)?", isPresented: $confirmingRevert
+                    ) {
+                        Button("Revert") { Task { await model.revertProject(project) } }
+                        Button("Cancel", role: .cancel) {}
+                    } message: {
+                        Text("This puts back the files the conversion changed, removes pnpm-lock.yaml and reinstalls node_modules with \(original.rawValue).")
+                    }
+            }
         }
         .fixedSize()
     }
+
+    @State private var confirmingRevert = false
 }

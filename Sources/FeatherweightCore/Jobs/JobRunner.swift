@@ -91,6 +91,104 @@ public final class JobRunner: @unchecked Sendable {
         return try body()
     }
 
+    // MARK: Converting to pnpm
+
+    /// Converts `project` to pnpm under the job lock (calling `onWaiting` first if it is held), then
+    /// appends a `.convert` record and refreshes savings and summaries. Package-manager commands run
+    /// through `commands` (the runner's own by default). A project that is not eligible is refused
+    /// before anything changes. A failure is recorded, then rethrown as a `ConversionFailure`; when
+    /// the project was put back, that attempt's backup is removed so it can't be "reverted" again.
+    public func convert(
+        _ project: Project, runBuildCheck: Bool, using commands: CommandRunner? = nil,
+        onWaiting: (() -> Void)? = nil, progress: @Sendable (ConversionStep) -> Void
+    ) throws -> ConversionResult {
+        try withLock(onWaiting: onWaiting) {
+            let context = loadContext()
+            let hours = context.settings.activityWindowHours
+            if let reason = ConversionEligibility.check(project, activity: ActivityChecker(), windowHours: hours) {
+                throw ConversionFailure(
+                    step: .backingUp, command: "", output: reason.message(windowHours: hours), reverted: true)
+            }
+            let name = project.root.lastPathComponent
+            let startedAt = Date()
+            let converter = PnpmConverter(runner: commands ?? runner, paths: paths, rewriter: ConfigRewriter())
+            do {
+                let result = try converter.convert(project, runBuildCheck: runBuildCheck, progress: progress)
+                _ = finish(
+                    conversionRecord(
+                        .convert, startedAt: startedAt, project: project, bytesFreed: result.bytesFreed,
+                        summary: "Converted \(name) to pnpm", errors: []),
+                    loadContext())
+                return result
+            } catch let failure as ConversionFailure {
+                if failure.reverted, let backup = ConversionBackup.latest(for: project.root, paths: paths),
+                   backup.createdAt >= startedAt {
+                    try? backup.delete(paths: paths)
+                }
+                let summary = failure.reverted
+                    ? "Converting \(name) to pnpm failed; it was put back as it was"
+                    : "Converting \(name) to pnpm failed and could not be fully undone"
+                _ = finish(
+                    conversionRecord(
+                        .convert, startedAt: startedAt, project: project, bytesFreed: 0, summary: summary,
+                        errors: [Self.describe(failure)]),
+                    loadContext())
+                throw failure
+            }
+        }
+    }
+
+    /// Puts `project` back on the package manager it used before its latest conversion, under the job
+    /// lock, and appends a `.revert` record. The backup is removed once the revert succeeds.
+    public func revert(
+        _ project: Project, using commands: CommandRunner? = nil, onWaiting: (() -> Void)? = nil
+    ) throws {
+        try withLock(onWaiting: onWaiting) {
+            guard let backup = ConversionBackup.latest(for: project.root, paths: paths) else {
+                throw ConversionFailure(
+                    step: .backingUp, command: "", output: "There is no conversion backup to revert to.",
+                    reverted: false)
+            }
+            let name = project.root.lastPathComponent
+            let manager = backup.originalManager.rawValue
+            let startedAt = Date()
+            let converter = PnpmConverter(runner: commands ?? runner, paths: paths, rewriter: ConfigRewriter())
+            do {
+                try converter.revert(project, backup: backup)
+                try? backup.delete(paths: paths)
+                _ = finish(
+                    conversionRecord(
+                        .revert, startedAt: startedAt, project: project, bytesFreed: 0,
+                        summary: "Reverted \(name) to \(manager)", errors: []),
+                    loadContext())
+            } catch let failure as ConversionFailure {
+                _ = finish(
+                    conversionRecord(
+                        .revert, startedAt: startedAt, project: project, bytesFreed: 0,
+                        summary: "Reverting \(name) to \(manager) failed", errors: [Self.describe(failure)]),
+                    loadContext())
+                throw failure
+            }
+        }
+    }
+
+    private func conversionRecord(
+        _ kind: JobKind, startedAt: Date, project: Project, bytesFreed: Int64, summary: String, errors: [String]
+    ) -> RunRecord {
+        RunRecord(
+            id: UUID(), kind: kind, trigger: .manualApp, startedAt: startedAt, finishedAt: Date(),
+            bytesFreed: bytesFreed, summary: summary, projects: [project.root.path], skipped: [], errors: errors,
+            lastFSEventID: FSEventsGetCurrentEventId())
+    }
+
+    /// The failed command and the end of its output, short enough for one history line.
+    private static func describe(_ failure: ConversionFailure) -> String {
+        let output = failure.output.trimmingCharacters(in: .whitespacesAndNewlines)
+        let tail = output.count > 2_000 ? "…" + output.suffix(2_000) : output
+        let command = failure.command.isEmpty ? "" : "\(failure.command): "
+        return "Failed while \(failure.step.displayText): \(command)\(tail)"
+    }
+
     // MARK: Refreshing derived state
 
     /// Re-measures shared bytes and writes `stats.json` (a failed write is not reported here).

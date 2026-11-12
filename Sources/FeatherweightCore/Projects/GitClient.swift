@@ -77,6 +77,25 @@ public struct GitClient: Sendable {
         output(["remote", "get-url", remote], in: root)
     }
 
+    /// The subset of `files` (paths relative to `repoRoot`) that git reports as changed: modified,
+    /// added, deleted or untracked, but not ignored. Staging an ignored or never-tracked path that no
+    /// longer exists would fail, so a conversion commits only these. Order follows `files`.
+    public func changedPaths(_ files: [String], repoRoot: URL) throws -> [String] {
+        guard !files.isEmpty else { return [] }
+        for file in files where !Self.isSafePathspec(file) {
+            throw GitError.invalidPathspec(file)
+        }
+        let args = ["--literal-pathspecs", "status", "--porcelain=v1", "-z", "--untracked-files=all", "--no-renames", "--"]
+            + files
+        let result = try exec(args, in: repoRoot)
+        guard result.succeeded else { throw Self.failure(args, result) }
+        // Each entry is "XY path"; with -z and no renames there is exactly one path per entry.
+        let reported = Set(result.stdout.split(separator: "\0").compactMap { entry -> String? in
+            entry.count > 3 ? String(entry.dropFirst(3)) : nil
+        })
+        return files.filter(reported.contains)
+    }
+
     /// Stages and commits exactly `files` (paths relative to `repoRoot`, deletions included).
     /// Anything else that is modified or staged is left alone, so a path that is empty, absolute,
     /// the repo root itself or contains a `..` component is rejected rather than staged.

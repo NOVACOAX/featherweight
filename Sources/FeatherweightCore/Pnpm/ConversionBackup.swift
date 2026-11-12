@@ -80,6 +80,15 @@ public struct ConversionBackup: Codable, Sendable, Equatable {
         if let firstError { throw firstError }
     }
 
+    /// Removes this backup's folder (and the project's folder once it is empty).
+    public func delete(paths: AppPaths) throws {
+        try FileManager.default.removeItem(at: folder(paths))
+        let projectFolder = folder(paths).deletingLastPathComponent()
+        if (try? FileManager.default.contentsOfDirectory(atPath: projectFolder.path))?.isEmpty == true {
+            try? FileManager.default.removeItem(at: projectFolder)
+        }
+    }
+
     /// The most recent backup of the project at `root`, or nil if there is none.
     public static func latest(for root: URL, paths: AppPaths) -> ConversionBackup? {
         let projectRoot = physicalPath(root)
