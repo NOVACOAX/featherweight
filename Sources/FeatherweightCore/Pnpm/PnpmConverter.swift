@@ -142,6 +142,8 @@ public struct PnpmConverter: Sendable {
             progress(.cleaningUp)
             for lockfile in oldLockfiles { try removeIfPresent(file(root, lockfile)) }
             let after = CloneFS.privateBytes(under: nodeModules)
+            // Lets a later revert warn about edits made since; the conversion stands without it.
+            _ = try? backup.recordingConvertedState(paths: paths)
 
             return ConversionResult(
                 changes: try changes(since: backup),

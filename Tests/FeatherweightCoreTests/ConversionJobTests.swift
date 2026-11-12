@@ -145,6 +145,20 @@ private struct ConversionFixture {
         #expect(ConversionBackup.latest(for: f.root, paths: f.paths) == nil)
     }
 
+    @Test func backupKnowsWhichFilesChangedSinceTheConversion() throws {
+        let f = try ConversionFixture()
+        defer { f.tree.remove() }
+        _ = try f.jobs.convert(f.project, runBuildCheck: false, using: f.commands) { _ in }
+        let backup = try #require(ConversionBackup.latest(for: f.root, paths: f.paths))
+        #expect(backup.filesChangedSinceConversion() == [])
+
+        // Weeks later: a dependency was added and the old lockfile reappeared.
+        try Data(#"{ "name": "a", "dependencies": { "left-pad": "1.3.0" } }"#.utf8).write(to: URL(fileURLWithPath: f.file("package.json")))
+        try Data("{}".utf8).write(to: URL(fileURLWithPath: f.file("package-lock.json")))
+
+        #expect(backup.filesChangedSinceConversion() == ["package-lock.json", "package.json"])
+    }
+
     @Test func revertWithoutABackupThrows() throws {
         let f = try ConversionFixture()
         defer { f.tree.remove() }

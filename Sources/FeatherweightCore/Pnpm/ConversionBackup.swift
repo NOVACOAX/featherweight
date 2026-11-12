@@ -18,6 +18,9 @@ public struct ConversionBackup: Codable, Sendable, Equatable {
     public let originalManager: PackageManager
     /// Relative path → whether the file existed when the backup was made.
     public let entries: [String: Bool]
+    /// Relative path → SHA-256 of the file just after the conversion finished ("" when it didn't
+    /// exist). Nil until the conversion succeeds, and in manifests written by older versions.
+    public private(set) var converted: [String: String]?
 
     /// Copies each of `relativePaths` that exists under `root` and records the ones that don't.
     /// Nothing in the project is changed. A partial backup is removed if anything fails.
@@ -50,14 +53,42 @@ public struct ConversionBackup: Codable, Sendable, Equatable {
             backup = ConversionBackup(
                 id: backup.id, projectRoot: projectRoot, createdAt: backup.createdAt, originalManager: manager,
                 entries: entries)
-            let encoder = JSONEncoder()
-            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-            try encoder.encode(backup).write(to: folder.appendingPathComponent("manifest.json"), options: .atomic)
+            try backup.writeManifest(paths)
             return backup
         } catch {
             try? fileManager.removeItem(at: folder)
             throw error
         }
+    }
+
+    /// Records how every backed-up path looks now, right after a successful conversion, and saves
+    /// the manifest, so a later revert can tell which files were edited since.
+    public func recordingConvertedState(paths: AppPaths) throws -> ConversionBackup {
+        var updated = self
+        updated.converted = Dictionary(uniqueKeysWithValues: entries.keys.map {
+            ($0, Self.fingerprint(projectRoot + "/" + $0))
+        })
+        try updated.writeManifest(paths)
+        return updated
+    }
+
+    /// The backed-up paths whose contents (or existence) changed since the conversion finished.
+    /// A revert would overwrite or delete them. Empty when the converted state wasn't recorded.
+    public func filesChangedSinceConversion() -> [String] {
+        guard let converted else { return [] }
+        return converted.filter { Self.fingerprint(projectRoot + "/" + $0.key) != $0.value }.keys.sorted()
+    }
+
+    private func writeManifest(_ paths: AppPaths) throws {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        try encoder.encode(self).write(to: folder(paths).appendingPathComponent("manifest.json"), options: .atomic)
+    }
+
+    /// SHA-256 of the file at `path`, or "" when nothing readable is there.
+    private static func fingerprint(_ path: String) -> String {
+        guard itemExists(path), let data = FileManager.default.contents(atPath: path) else { return "" }
+        return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }
 
     /// Puts back every file that existed, byte-for-byte (atomically, with its permissions), and

@@ -261,6 +261,12 @@ final class AppModel {
         }
     }
 
+    /// Files a revert of `project` would overwrite even though they were edited after the conversion.
+    func filesChangedSinceConversion(of project: ProjectSummary) -> [String] {
+        ConversionBackup.latest(for: URL(fileURLWithPath: project.id, isDirectory: true), paths: paths)?
+            .filesChangedSinceConversion() ?? []
+    }
+
     /// The inspector's "Revert to npm/yarn": shows what went wrong as a notice.
     func revertProject(_ project: ProjectSummary) async {
         let root = URL(fileURLWithPath: project.id, isDirectory: true)

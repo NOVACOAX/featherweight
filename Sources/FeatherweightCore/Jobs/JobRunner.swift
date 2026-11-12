@@ -103,8 +103,7 @@ public final class JobRunner: @unchecked Sendable {
         onWaiting: (() -> Void)? = nil, progress: @Sendable (ConversionStep) -> Void
     ) throws -> ConversionResult {
         try withLock(onWaiting: onWaiting) {
-            let context = loadContext()
-            let hours = context.settings.activityWindowHours
+            let hours = SettingsStore(paths: paths).load().activityWindowHours
             if let reason = ConversionEligibility.check(project, activity: ActivityChecker(), windowHours: hours) {
                 throw ConversionFailure(
                     step: .backingUp, command: "", output: reason.message(windowHours: hours), reverted: true)

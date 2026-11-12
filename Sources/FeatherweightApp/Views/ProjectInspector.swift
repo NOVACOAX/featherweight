@@ -67,7 +67,10 @@ struct ProjectInspector: View {
                 if model.runningJob == .revert {
                     ProgressView().controlSize(.small)
                 }
-                Button("Revert to \(original.rawValue)") { confirmingRevert = true }
+                Button("Revert to \(original.rawValue)") {
+                    editedSinceConversion = model.filesChangedSinceConversion(of: project)
+                    confirmingRevert = true
+                }
                     .disabled(busy)
                     .help(busy ? "Another job is running" : "Undo the conversion to pnpm")
                     .confirmationDialog(
@@ -76,7 +79,7 @@ struct ProjectInspector: View {
                         Button("Revert") { Task { await model.revertProject(project) } }
                         Button("Cancel", role: .cancel) {}
                     } message: {
-                        Text("This puts back the files the conversion changed, removes pnpm-lock.yaml and reinstalls node_modules with \(original.rawValue).")
+                        Text(revertMessage(original))
                     }
             }
         }
@@ -84,4 +87,13 @@ struct ProjectInspector: View {
     }
 
     @State private var confirmingRevert = false
+    /// Files edited since the conversion, which the revert would overwrite. Read when Revert is clicked.
+    @State private var editedSinceConversion: [String] = []
+
+    private func revertMessage(_ original: PackageManager) -> String {
+        let base = "This puts back the files the conversion changed, removes pnpm-lock.yaml and reinstalls node_modules with \(original.rawValue)."
+        guard !editedSinceConversion.isEmpty else { return base }
+        return base + "\n\nThese files were edited after the conversion, and your edits will be lost: "
+            + editedSinceConversion.joined(separator: ", ") + "."
+    }
 }
