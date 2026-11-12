@@ -401,7 +401,7 @@ struct PnpmConverterTests {
           "name": "fw-integration",
           "version": "1.0.0",
           "private": true,
-          "scripts": { "build": "node -e \\"require('is-number')\\"" },
+          "scripts": { "build": "node -e \\"require('is-number')\\"", "check": "npm run build" },
           "dependencies": { "is-number": "7.0.0" }
         }
 
@@ -414,7 +414,8 @@ struct PnpmConverterTests {
         let project = Project(
             root: root, parentRoot: nil, packageManager: .npm,
             nodeModules: URL(fileURLWithPath: root.path + "/node_modules"))
-        let converter = PnpmConverter(runner: runner, paths: paths, rewriter: StubRewriter())
+        let originalManifest = try Data(contentsOf: URL(fileURLWithPath: root.path + "/package.json"))
+        let converter = PnpmConverter(runner: runner, paths: paths, rewriter: ConfigRewriter())
 
         let result = try converter.convert(project, runBuildCheck: true) { _ in }
 
@@ -423,11 +424,14 @@ struct PnpmConverterTests {
         #expect(FileManager.default.fileExists(atPath: root.path + "/node_modules/is-number/package.json"))
         #expect(PnpmToolchain(runner: runner).isSupported(result.pnpmVersion))
         #expect(result.changes.contains { $0.relativePath == "pnpm-lock.yaml" && $0.kind == .added })
+        #expect(try String(contentsOf: URL(fileURLWithPath: root.path + "/package.json"), encoding: .utf8)
+            .contains("\"check\": \"pnpm run build\""))
 
         let backup = try #require(ConversionBackup.latest(for: root, paths: paths))
         try converter.revert(project, backup: backup)
 
         #expect(try Data(contentsOf: URL(fileURLWithPath: lockPath)) == originalLock)
+        #expect(try Data(contentsOf: URL(fileURLWithPath: root.path + "/package.json")) == originalManifest)
         #expect(!FileManager.default.fileExists(atPath: root.path + "/pnpm-lock.yaml"))
         #expect(FileManager.default.fileExists(atPath: root.path + "/node_modules/is-number/package.json"))
         #expect(!FileManager.default.fileExists(atPath: root.path + "/node_modules/.pnpm"))
