@@ -29,6 +29,10 @@ Featherweight saves space in two ways, both automatic, and you can run either by
    `.parcel-cache` and `.cache` grow into gigabytes and rebuild themselves on demand.
    Featherweight deletes them on a schedule (weekly by default), as long as it's safe.
 
+On request, Featherweight also **converts a project to pnpm**, which keeps one shared copy of
+each package version for all your projects. See
+[Converting a project to pnpm](#converting-a-project-to-pnpm).
+
 A third piece ties these together: a **background helper** that starts when you log in, has
 no Dock or menu bar icon, and does the scheduled work. The app is a normal window you open
 to see what happened, change settings, or run a job. Closing it doesn't stop the helper.
@@ -74,9 +78,12 @@ contents), it replaces one with a clone of the other. That's all it does:
 
 Disk space is not worth a broken project. Featherweight follows these rules:
 
-**It never changes your projects' files.** `package.json`, lockfiles, scripts, and source
-files are never edited. It never runs a package manager, and it never commits or pushes
-anything.
+**It never changes your projects' files on its own.** Sharing duplicates and clearing caches
+never edit `package.json`, lockfiles, scripts or source files, never run a package manager,
+and never commit or push anything. The one exception is
+[converting a project to pnpm](#converting-a-project-to-pnpm), which happens only when you
+click **Convert**, backs up every file it changes first, and commits only when you click
+**Commit**.
 
 **Only the folders you choose.** It works inside the projects folders you pick in Settings
 and nowhere else. Folders in iCloud Drive (or any other cloud-sync folder) are refused,
@@ -118,6 +125,50 @@ jobs never run at once.
 
 **Light on the Mac.** The helper sleeps between events and timers (it never polls), uses
 background priority with throttled disk access, and the whole download is about 4 MB.
+
+## Converting a project to pnpm
+
+pnpm keeps a single copy of each package version in a global store and links every project
+to it, so a project that uses pnpm takes very little space of its own. Converting is manual
+and per project: select an npm or yarn project in **Projects** and click
+**Convert to pnpm…**.
+
+The sheet lists what will happen and warns that anyone who clones the project will need
+pnpm too. Then Featherweight:
+
+1. backs up the lockfile and every file the conversion may change
+2. runs `pnpm import`, which turns `package-lock.json`, `npm-shrinkwrap.json` or `yarn.lock`
+   into a `pnpm-lock.yaml` with exactly the same versions
+3. lists the dependencies that have install scripts (esbuild, sharp, prisma and so on) under
+   `onlyBuiltDependencies` in `pnpm-workspace.yaml`, so they still build as they did
+4. removes `node_modules` and runs `pnpm install --frozen-lockfile`
+5. runs the project's `build` script, if it has one and you left that option on
+6. updates the configs it recognises with certainty: GitHub Actions workflows (adding a
+   `pnpm/action-setup` step), Dockerfiles, `firebase.json` predeploy steps, `netlify.toml`,
+   `vercel.json`, `package.json` scripts and an existing `packageManager` field
+7. deletes the old lockfile
+
+If any step fails, every file is put back byte for byte and the project is reinstalled with
+npm or yarn. The sheet shows the failing command's output.
+
+When it finishes, you see the space freed, every changed file with its diff, and any lines
+that still mention npm or yarn but weren't safe to change, each with its file and line.
+Examples are `npm install some-package --prefix /tmp/dir`, commands that run in another
+folder, and unfamiliar CI providers. Then you choose:
+
+- **Commit**, or **Commit & Push** when the branch has an upstream. Only the files the
+  conversion changed are staged; other uncommitted work is left alone. If the push fails,
+  git's message is shown and the commit stays on your Mac.
+- **Revert**, which restores the backup and reinstalls with the original package manager.
+  **Revert to npm** (or yarn) stays on the project in **Projects** for as long as its backup
+  exists.
+- **Not now**, which leaves the changes uncommitted.
+
+Converting needs pnpm 10 or later. If it's missing, Featherweight offers to install it with
+`corepack enable pnpm` (or `npm install -g pnpm@latest` when Corepack isn't available). It
+shows the command and runs it only when you click **Install pnpm**. Projects that use bun,
+already use pnpm, use `workspaces`, or were active within the activity window can't be
+converted, and the button says why.
 
 ## Requirements
 
@@ -205,7 +256,7 @@ The sidebar has three sections:
   you see the package manager (read from its lockfile), the logical size of `node_modules`,
   how much is shared, the size of its caches, when it was last active, and a status such as
   "Up to date", "Cleared 4.0 GB", "Skipped: active" or "Tracked in git". Select one to see
-  its path and git branch, show it in Finder, or clear its caches. A project that is
+  its path and git branch, show it in Finder, clear its caches, or convert it to pnpm. A project that is
   skipped has the reason shown next to the disabled button.
 - **Activity** is the full history of runs, what each freed, and any errors.
 

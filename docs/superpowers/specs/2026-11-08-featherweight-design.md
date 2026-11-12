@@ -189,8 +189,8 @@ spaces, including trailing spaces such as `Lightroom `, and must be handled corr
 
 ### Convert to pnpm (per project, manual)
 
-> **Deferred to a later release (2026-11-09, Hugh's decision).** Work in progress is
-> on the `pnpm-conversion` branch. v1 ships without this feature.
+> **Not in v0.1.x (deferred on 2026-11-09).** Built on the `pnpm-conversion` branch for the
+> next release.
 
 pnpm's built-in `pnpm import` command converts an existing `package-lock.json`,
 `npm-shrinkwrap.json`, or `yarn.lock` into a `pnpm-lock.yaml` with the same resolved

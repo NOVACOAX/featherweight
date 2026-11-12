@@ -3,6 +3,15 @@
 All notable changes to Featherweight are listed here. Versions follow
 [semantic versioning](https://semver.org).
 
+## [Unreleased]
+
+### Added
+
+- **Convert to pnpm…** on the Projects screen converts an npm or yarn project to pnpm with
+  the same package versions. It backs up every file first, updates CI, Docker and deploy
+  configs it recognises with certainty, lists the ones it couldn't change, and offers
+  **Commit**, **Commit & Push** and **Revert**. A failed conversion puts everything back.
+
 ## [0.1.1] - 2026-11-10
 
 ### Fixed
