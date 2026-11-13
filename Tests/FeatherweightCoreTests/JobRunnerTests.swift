@@ -205,6 +205,58 @@ private struct RunnerFixture {
         #expect(summaries.map(\.sharedBytes).reduce(0, +) == stats.sharedBytes)
     }
 
+    @Test func aScopedJobWalksOnlyItsOwnProjects() throws {
+        let f = try RunnerFixture()
+        defer { f.tree.remove() }
+        // A full run measures every project and keeps each one's tally.
+        _ = f.runner.dedupe(trigger: .scheduled, dryRun: false)
+        let fullStats = try f.readJSON(SavingsSnapshot.self, f.paths.stats)
+        let fullSummaries = try f.readJSON([ProjectSummary].self, f.paths.projects)
+        #expect(fullStats.sharedBytes > 0)
+        let a = f.projectURL("a").appendingPathComponent("node_modules").path
+        let b = f.projectURL("b").appendingPathComponent("node_modules").path
+        let (walksA, walksB) = (NodeModulesFiles.walks(of: a), NodeModulesFiles.walks(of: b))
+
+        _ = f.runner.dedupe(trigger: .afterInstall, only: [f.projectURL("a")], dryRun: false)
+
+        #expect(NodeModulesFiles.walks(of: b) == walksB)
+        #expect(NodeModulesFiles.walks(of: a) - walksA == 2)
+        // The figures are exactly what a full measurement gives, credit split included.
+        let stats = try f.readJSON(SavingsSnapshot.self, f.paths.stats)
+        #expect(stats.sharedBytes == fullStats.sharedBytes)
+        #expect(stats.perProject == fullStats.perProject)
+        let summaries = try f.readJSON([ProjectSummary].self, f.paths.projects)
+        #expect(summaries.map(\.nodeModulesBytes) == fullSummaries.map(\.nodeModulesBytes))
+        let direct = SavingsMeter().measure(projects: [
+            Project(root: f.projectURL("a"), parentRoot: nil, packageManager: .npm, nodeModules: URL(fileURLWithPath: a)),
+            Project(root: f.projectURL("b"), parentRoot: nil, packageManager: .npm, nodeModules: URL(fileURLWithPath: b)),
+        ], now: Date())
+        #expect(stats.sharedBytes == direct.sharedBytes)
+        #expect(stats.perProject == direct.perProject)
+    }
+
+    @Test func aScopedJobAlsoMeasuresProjectsItHasNotSeen() throws {
+        let f = try RunnerFixture()
+        defer { f.tree.remove() }
+        _ = f.runner.dedupe(trigger: .scheduled, dryRun: false)
+        try f.tree.add([
+            "projects/c/package.json": "{}",
+            "projects/c/package-lock.json": "{}",
+            "projects/c/node_modules/c-only/index.js": String(repeating: "c", count: 4_000),
+        ])
+        try f.tree.setAllMTimes(to: Date().addingTimeInterval(-30 * 86_400))
+        let c = f.projectURL("c").appendingPathComponent("node_modules").path
+        let b = f.projectURL("b").appendingPathComponent("node_modules").path
+        let walksB = NodeModulesFiles.walks(of: b)
+
+        _ = f.runner.dedupe(trigger: .afterInstall, only: [f.projectURL("a")], dryRun: false)
+
+        #expect(NodeModulesFiles.walks(of: c) == 1)
+        #expect(NodeModulesFiles.walks(of: b) == walksB)
+        let summaries = try f.readJSON([ProjectSummary].self, f.paths.projects)
+        #expect(summaries.first { $0.name == "c" }?.nodeModulesBytes == 4_000)
+    }
+
     @Test func nonDryRunWaitsForTheLockAndReportsWaiting() throws {
         let f = try RunnerFixture()
         defer { f.tree.remove() }

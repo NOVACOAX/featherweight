@@ -214,6 +214,8 @@ public final class JobRunner: @unchecked Sendable {
         let allProjects: [Project]
         /// The projects this run works on (`only`, or all of them).
         let runProjects: [Project]
+        /// The run was limited to `only`: projects outside it were not changed by the run.
+        let scoped: Bool
     }
 
     private func loadContext(only: [URL]? = nil) -> Context {
@@ -225,7 +227,7 @@ public final class JobRunner: @unchecked Sendable {
             let wanted = Set(only.map(Self.normalized))
             run = all.filter { wanted.contains(Self.normalized($0.root)) }
         }
-        return Context(settings: settings, allProjects: all, runProjects: run)
+        return Context(settings: settings, allProjects: all, runProjects: run, scoped: only != nil)
     }
 
     private static func normalized(_ url: URL) -> String {
@@ -262,12 +264,42 @@ public final class JobRunner: @unchecked Sendable {
         } catch {
             failures.append("history: \(error.localizedDescription)")
         }
-        // One walk measures both the savings and each project's node_modules size.
-        let (savings, logicalBytes) = SavingsMeter().measureWithSizes(projects: context.allProjects, now: Date())
+        let (savings, logicalBytes) = measureNodeModules(context)
         failures += write(savings, to: paths.stats)
         failures += writeSummaries(
             context, savings: savings, clearedBytes: clearedBytes, logicalBytes: logicalBytes).errors
         return failures
+    }
+
+    /// The savings snapshot and each project's logical `node_modules` size, by index. A scoped run
+    /// walks only its own projects (and any never measured, or whose folder moved) and reuses the
+    /// stored tallies of the rest, which it did not change; a full run walks every project. The
+    /// result is the same as one walk of all of them. If the store can't be used, all are walked.
+    private func measureNodeModules(_ context: Context) -> (SavingsSnapshot, [Int64]) {
+        let projects = context.allProjects
+        let touched = Set(context.runProjects.map(\.root.path))
+        let scoped = context.scoped
+        let url = paths.tallies
+        let now = Date()
+        // Each tally is stored as soon as it is walked, so only one project's is held at a time.
+        let combined: (SavingsSnapshot, [Int64])? = BackgroundWork.run {
+            do {
+                let store = try SavingsTallyStore(url: url)
+                let stored = try store.measuredFolders()
+                let walked = SavingsMeter.outermost(projects)
+                for index in walked {
+                    let project = projects[index]
+                    guard let folder = project.nodeModules?.path else { continue }
+                    if scoped, !touched.contains(project.root.path), stored[project.root.path] == folder { continue }
+                    try store.replace(root: project.root.path, folder: folder, with: SavingsMeter.tally(project))
+                }
+                try store.retain(roots: Set(walked.map { projects[$0].root.path }))
+                return try store.combine(projects: projects, included: walked, now: now)
+            } catch {
+                return nil
+            }
+        }
+        return combined ?? SavingsMeter().measureWithSizes(projects: projects, now: now)
     }
 
     private func writeSavings(_ projects: [Project]) -> SavingsSnapshot {

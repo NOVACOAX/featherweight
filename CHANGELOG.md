@@ -11,8 +11,12 @@ All notable changes to Featherweight are listed here. Versions follow
   projects asked macOS whether every single file was in iCloud, and the answers piled up until
   the job ended; a run that peaked at 1.5 GB now peaks at a few megabytes. The helper also hands
   its memory back to macOS after each job instead of holding on to it while idle.
-- Each job reads your `node_modules` folders one fewer time, and finding projects takes about a
-  third as long, so the helper spends much less time working in the background.
+- After an install, the helper now re-measures only the project you installed in, instead of
+  reading every project's `node_modules` again. On a Mac with 31 projects and half a million
+  `node_modules` files, that step drops from about a minute to under a second. Each project's
+  last measurement is kept in a small file (about 8 MB) in Featherweight's Application Support
+  folder; the nightly run still re-reads everything. Finding projects also takes about a third
+  as long as before.
 
 ## [0.2.0] - 2026-11-12
 

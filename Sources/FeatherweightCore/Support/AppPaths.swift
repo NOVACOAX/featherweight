@@ -42,6 +42,8 @@ public struct AppPaths: Sendable {
     public var appState: URL { base.appendingPathComponent("state.json") }
     public var projects: URL { base.appendingPathComponent("projects.json") }
     public var hashCache: URL { base.appendingPathComponent("hashes.sqlite") }
+    /// Each project's latest node_modules tally, so jobs re-walk only the projects they touched.
+    public var tallies: URL { base.appendingPathComponent("tallies.sqlite") }
     public var jobLock: URL { base.appendingPathComponent("jobs.lock") }
     public var helperPID: URL { base.appendingPathComponent("helper.pid") }
     public var backups: URL { base.appendingPathComponent("backups", isDirectory: true) }
