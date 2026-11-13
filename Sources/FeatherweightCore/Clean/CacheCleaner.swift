@@ -320,10 +320,11 @@ public struct CacheCleaner: Sendable {
         ) else { return (0, false, "cannot enumerate folder") }
         var total: Int64 = 0
         var containsGit = false
-        for case let url as URL in enumerator {
+        enumerator.forEachURL { url in
             if CacheFolderSetting.isGitName(url.lastPathComponent) { containsGit = true }
-            guard let values = try? url.resourceValues(forKeys: Set(keys)) else { continue }
+            guard let values = try? url.resourceValues(forKeys: Set(keys)) else { return true }
             total += Int64(values.totalFileAllocatedSize ?? values.fileAllocatedSize ?? 0)
+            return true
         }
         return (total, containsGit, problem)
     }

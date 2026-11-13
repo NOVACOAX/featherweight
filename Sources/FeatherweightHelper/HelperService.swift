@@ -21,7 +21,9 @@ final class HelperService {
     private let jobs: JobRunner
     private let notifier = Notifier()
     private lazy var watcher = FSEventsWatcher { [unowned self] in self.handle($0) }
-    private let jobQueue = DispatchQueue(label: "com.novacoax.featherweight.helper.jobs", qos: .background)
+    /// Drains autoreleased objects after each job instead of keeping them for the thread's lifetime.
+    private let jobQueue = DispatchQueue(
+        label: "com.novacoax.featherweight.helper.jobs", qos: .background, autoreleaseFrequency: .workItem)
     private let scanQueue = DispatchQueue(label: "com.novacoax.featherweight.helper.scan", qos: .background)
 
     private var settings: Settings
@@ -288,6 +290,9 @@ final class HelperService {
                 let result = jobs.dedupe(trigger: trigger, only: roots, dryRun: false)
                 (errors, record) = (result.0.errors, result.1)
             }
+            // Hand the job's freed memory back to the system, so the idle helper stays small
+            // instead of keeping its peak until macOS asks for it.
+            malloc_zone_pressure_relief(nil, 0)
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
                     self?.finished(kind, trigger: trigger, record: record, errors: errors,

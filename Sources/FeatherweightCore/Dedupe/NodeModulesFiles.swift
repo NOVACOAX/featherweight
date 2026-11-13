@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 /// A regular file found under a project's `node_modules`.
 struct NodeModulesFile {
@@ -32,9 +33,18 @@ enum NodeModulesFiles {
         }
     }
 
+    /// How many times each `node_modules` folder (by path) has been walked in this process. Walks
+    /// are the helper's main cost, so tests use this to pin how many a job makes.
+    private static let walkCounts = OSAllocatedUnfairLock(initialState: [String: Int]())
+
+    static func walks(of path: String) -> Int {
+        walkCounts.withLock { $0[path, default: 0] }
+    }
+
     private static func walk(
         _ directory: URL, project: Int, onError: (String) -> Void, _ body: (NodeModulesFile) -> Void
     ) {
+        walkCounts.withLock { $0[directory.path, default: 0] += 1 }
         // The enumerator's handler escapes, so its errors are collected and reported afterwards.
         var walkErrors: [String] = []
         let walker = FileManager.default.enumerator(
@@ -43,19 +53,15 @@ enum NodeModulesFiles {
                 walkErrors.append("\(url.path): \(error.localizedDescription)")
                 return true
             })
-        while let next = walker?.nextObject() {
-            // Drain per entry so a large tree does not accumulate autoreleased objects.
-            autoreleasepool {
-                guard let url = next as? URL,
-                      (try? url.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile == true
-                else { return }
-                do {
-                    let info = try CloneFS.info(at: url)
-                    if info.isRegularFile { body(NodeModulesFile(url: url, project: project, info: info)) }
-                } catch {
-                    onError("\(url.path): \(error)")
-                }
+        walker?.forEachURL { url in
+            guard (try? url.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile == true else { return true }
+            do {
+                let info = try CloneFS.info(at: url)
+                if info.isRegularFile { body(NodeModulesFile(url: url, project: project, info: info)) }
+            } catch {
+                onError("\(url.path): \(error)")
             }
+            return true
         }
         walkErrors.forEach(onError)
     }

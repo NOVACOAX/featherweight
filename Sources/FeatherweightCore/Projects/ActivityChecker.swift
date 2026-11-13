@@ -38,14 +38,15 @@ public struct ActivityChecker: Sendable {
         guard let enumerator = FileManager.default.enumerator(
             at: root, includingPropertiesForKeys: keys, options: []
         ) else { return }
-        for case let url as URL in enumerator {
-            guard let values = try? url.resourceValues(forKeys: Set(keys)) else { continue }
-            if values.isSymbolicLink == true { continue }
+        enumerator.forEachURL { url in
+            guard let values = try? url.resourceValues(forKeys: Set(keys)) else { return true }
+            if values.isSymbolicLink == true { return true }
             if values.isDirectory == true {
                 if skipNames.contains(url.lastPathComponent) { enumerator.skipDescendants() }
             } else if values.isRegularFile == true, let mtime = values.contentModificationDate {
-                if !visit(mtime) { return }
+                return visit(mtime)
             }
+            return true
         }
     }
 }

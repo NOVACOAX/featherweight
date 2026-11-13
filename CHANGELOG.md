@@ -3,6 +3,17 @@
 All notable changes to Featherweight are listed here. Versions follow
 [semantic versioning](https://semver.org).
 
+## [0.2.1] - 2026-11-13
+
+### Fixed
+
+- The background helper no longer climbs to gigabytes of memory while it works. Finding your
+  projects asked macOS whether every single file was in iCloud, and the answers piled up until
+  the job ended; a run that peaked at 1.5 GB now peaks at a few megabytes. The helper also hands
+  its memory back to macOS after each job instead of holding on to it while idle.
+- Each job reads your `node_modules` folders one fewer time, and finding projects takes about a
+  third as long, so the helper spends much less time working in the background.
+
 ## [0.2.0] - 2026-11-12
 
 ### Added

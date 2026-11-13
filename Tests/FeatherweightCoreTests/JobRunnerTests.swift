@@ -188,6 +188,23 @@ private struct RunnerFixture {
         #expect(summary.status == "Skipped: active")
     }
 
+    @Test func finishingAJobWalksNodeModulesOnce() throws {
+        let f = try RunnerFixture()
+        defer { f.tree.remove() }
+        let folder = f.projectURL("a").appendingPathComponent("node_modules").path
+        let before = NodeModulesFiles.walks(of: folder)
+
+        _ = f.runner.dedupe(trigger: .manualCLI, dryRun: false)
+
+        // One walk to find duplicates, one to measure savings and sizes together.
+        #expect(NodeModulesFiles.walks(of: folder) - before == 2)
+        let summaries = try f.readJSON([ProjectSummary].self, f.paths.projects)
+        #expect(summaries.allSatisfy { $0.nodeModulesBytes >= 65_536 })
+        let stats = try f.readJSON(SavingsSnapshot.self, f.paths.stats)
+        #expect(stats.sharedBytes > 0)
+        #expect(summaries.map(\.sharedBytes).reduce(0, +) == stats.sharedBytes)
+    }
+
     @Test func nonDryRunWaitsForTheLockAndReportsWaiting() throws {
         let f = try RunnerFixture()
         defer { f.tree.remove() }

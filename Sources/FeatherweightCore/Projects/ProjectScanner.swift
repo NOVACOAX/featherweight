@@ -111,21 +111,24 @@ public struct ProjectScanner: Sendable {
            !fm.fileExists(atPath: folder.appendingPathComponent("pyvenv.cfg").path) {
             found.append(folder)
         }
-        let keys: [URLResourceKey] = [.isDirectoryKey, .isSymbolicLinkKey, .isRegularFileKey, .isUbiquitousItemKey]
+        // Cheap keys the enumerator reads in bulk. `isUbiquitousItem` goes through FileProvider, so
+        // it is asked only for folders that are not skipped by name, never for every file.
+        let keys: [URLResourceKey] = [.isDirectoryKey, .isSymbolicLinkKey, .isRegularFileKey]
         guard let enumerator = fm.enumerator(
             at: folder, includingPropertiesForKeys: keys, options: []
         ) else { return found }
-        for case let url as URL in enumerator {
-            guard let values = try? url.resourceValues(forKeys: Set(keys)) else { continue }
-            if values.isSymbolicLink == true { continue }  // never follow symlinks
+        enumerator.forEachURL { url in
+            guard let values = try? url.resourceValues(forKeys: Set(keys)) else { return true }
+            if values.isSymbolicLink == true { return true }  // never follow symlinks
             if values.isDirectory == true {
-                if values.isUbiquitousItem == true || isSyncRoot(url.path)
-                    || isSkippedDirectory(url, name: url.lastPathComponent) {
+                if isSkippedDirectory(url, name: url.lastPathComponent) || isSyncRoot(url.path)
+                    || (try? url.resourceValues(forKeys: [.isUbiquitousItemKey]))?.isUbiquitousItem == true {
                     enumerator.skipDescendants()
                 }
-            } else if values.isRegularFile == true, url.lastPathComponent == "package.json" {
+            } else if url.lastPathComponent == "package.json", values.isRegularFile == true {
                 found.append(Self.canonical(url.deletingLastPathComponent()))
             }
+            return true
         }
         return found
     }

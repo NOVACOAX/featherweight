@@ -22,6 +22,11 @@ public struct SavingsMeter: Sendable {
     /// A group of n files saves (n − 1) × allocated size; each member but the first in path order
     /// credits its own allocated size to its project. Runs at background QoS with throttled I/O.
     public func measure(projects: [Project], now: Date) -> SavingsSnapshot {
+        measureWithSizes(projects: projects, now: now).snapshot
+    }
+
+    /// The snapshot plus each project's logical `node_modules` size (by index), from one walk.
+    public func measureWithSizes(projects: [Project], now: Date) -> (snapshot: SavingsSnapshot, logicalBytes: [Int64]) {
         BackgroundWork.run { Self.tally(projects: projects, now: now) }
     }
 
@@ -36,10 +41,12 @@ public struct SavingsMeter: Sendable {
         let allocatedSize: Int64
     }
 
-    private static func tally(projects: [Project], now: Date) -> SavingsSnapshot {
+    private static func tally(projects: [Project], now: Date) -> (snapshot: SavingsSnapshot, logicalBytes: [Int64]) {
         var groups: [CloneKey: [Clone]] = [:]
+        var logical = [Int64](repeating: 0, count: projects.count)
         NodeModulesFiles.forEach(in: projects, onError: { _ in }) { file in
             let info = file.info
+            logical[file.project] += info.size
             guard NodeModulesFiles.isCandidate(info), info.sharesAllBlocks, info.cloneID != 0 else { return }
             groups[CloneKey(device: info.device, cloneID: info.cloneID), default: []]
                 .append(Clone(path: file.url.path, project: file.project, allocatedSize: info.allocatedSize))
@@ -52,6 +59,6 @@ public struct SavingsMeter: Sendable {
                 snapshot.perProject[projects[clone.project].root.path, default: 0] += clone.allocatedSize
             }
         }
-        return snapshot
+        return (snapshot, logical)
     }
 }

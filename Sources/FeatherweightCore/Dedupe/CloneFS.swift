@@ -159,10 +159,11 @@ public enum CloneFS {
             at: directory, includingPropertiesForKeys: nil, options: [], errorHandler: { _, _ in true })
         else { return 0 }
         var total: Int64 = 0
-        for case let url as URL in walker {
+        walker.forEachURL { url in
             if let info = try? info(at: url), info.isRegularFile, info.linkCount == 1 {
                 total += info.privateSize
             }
+            return true
         }
         return total
     }

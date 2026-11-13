@@ -262,9 +262,11 @@ public final class JobRunner: @unchecked Sendable {
         } catch {
             failures.append("history: \(error.localizedDescription)")
         }
-        let savings = SavingsMeter().measure(projects: context.allProjects, now: Date())
+        // One walk measures both the savings and each project's node_modules size.
+        let (savings, logicalBytes) = SavingsMeter().measureWithSizes(projects: context.allProjects, now: Date())
         failures += write(savings, to: paths.stats)
-        failures += writeSummaries(context, savings: savings, clearedBytes: clearedBytes).errors
+        failures += writeSummaries(
+            context, savings: savings, clearedBytes: clearedBytes, logicalBytes: logicalBytes).errors
         return failures
     }
 
@@ -279,14 +281,16 @@ public final class JobRunner: @unchecked Sendable {
         return try? JSONDecoder().decode(SavingsSnapshot.self, from: data)
     }
 
+    /// `logicalBytes` are the projects' `node_modules` sizes by index when the caller already
+    /// walked them; otherwise they are measured here.
     private func writeSummaries(
-        _ context: Context, savings: SavingsSnapshot, clearedBytes: [String: Int64]
+        _ context: Context, savings: SavingsSnapshot, clearedBytes: [String: Int64], logicalBytes: [Int64]? = nil
     ) -> (summaries: [ProjectSummary], errors: [String]) {
         let projects = context.allProjects
         let plan = CacheCleaner(git: GitClient(runner: runner), activity: ActivityChecker())
             .plan(projects: projects, settings: context.settings)
         let candidatesByRoot = Dictionary(grouping: plan, by: \.projectRoot)
-        let measured = BackgroundWork.run { Self.measure(projects) }
+        let measured = BackgroundWork.run { Self.measure(projects, logicalBytes: logicalBytes) }
         let git = GitClient(runner: runner)
         let lastClean = history.lastRun(of: .clean)
 
@@ -316,11 +320,16 @@ public final class JobRunner: @unchecked Sendable {
         return (summaries, write(summaries, to: paths.projects))
     }
 
-    /// Logical `node_modules` size and newest source change for each project, by index.
-    private static func measure(_ projects: [Project]) -> (logicalBytes: [Int64], lastActive: [Date?]) {
-        var logical = [Int64](repeating: 0, count: projects.count)
-        NodeModulesFiles.forEach(in: projects, onError: { _ in }) { file in
-            logical[file.project] += file.info.size
+    /// Logical `node_modules` size and newest source change for each project, by index. The sizes
+    /// are walked only when `logicalBytes` doesn't already hold them.
+    private static func measure(
+        _ projects: [Project], logicalBytes: [Int64]?
+    ) -> (logicalBytes: [Int64], lastActive: [Date?]) {
+        var logical = logicalBytes ?? [Int64](repeating: 0, count: projects.count)
+        if logicalBytes == nil {
+            NodeModulesFiles.forEach(in: projects, onError: { _ in }) { file in
+                logical[file.project] += file.info.size
+            }
         }
         let activity = ActivityChecker()
         return (logical, projects.map { activity.lastSourceChange(root: $0.root) })
